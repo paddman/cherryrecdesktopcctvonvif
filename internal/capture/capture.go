@@ -92,11 +92,15 @@ func (m *Manager) superviseMediaMTX(ctx context.Context) {
 			log.Printf("MediaMTX start failed: %v", err)
 		} else {
 			log.Printf("MediaMTX started pid=%d", cmd.Process.Pid)
+			started := time.Now()
 			err := cmd.Wait()
 			if ctx.Err() != nil {
 				return
 			}
 			log.Printf("MediaMTX exited: %v", err)
+			if time.Since(started) > time.Minute {
+				backoff = time.Second
+			}
 		}
 		if !sleepContext(ctx, backoff) {
 			return
@@ -201,6 +205,8 @@ func (m *Manager) mediaMTXEnv() []string {
 		"MTX_AUTHINTERNALUSERS_0_IPS=127.0.0.1,::1",
 		"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_ACTION=publish",
 		"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_PATH=" + m.cfg.RTSPPath,
+		"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_1_ACTION=read",
+		"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_1_PATH=" + m.cfg.RTSPPath,
 		"MTX_AUTHINTERNALUSERS_1_USER=" + m.cfg.RTSPUsername,
 		"MTX_AUTHINTERNALUSERS_1_PASS=" + m.cfg.RTSPPassword,
 		"MTX_AUTHINTERNALUSERS_1_PERMISSIONS_0_ACTION=read",
