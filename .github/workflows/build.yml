@@ -2,8 +2,11 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, production-ready]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   windows-build:
@@ -13,25 +16,33 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
-      - name: Format sources
+          cache: false
+      - name: Format check
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Recurse -Filter *.go | ForEach-Object { $_.FullName }
-          gofmt -w $files
+          $bad = Get-ChildItem -Recurse -Filter *.go | ForEach-Object { gofmt -l $_.FullName }
+          if ($bad) { $bad; throw "gofmt required" }
+      - name: Vet
+        run: go vet ./...
       - name: Test
-        run: go test ./...
+        run: go test -count=1 ./...
       - name: Build Windows executable
-        run: go build -trimpath -o cherrycctv.exe ./cmd/cherrycctv
+        run: go build -trimpath -ldflags "-s -w -X main.version=${{ github.sha }}" -o cherrycctv.exe ./cmd/cherrycctv
       - name: Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
+          New-Item -ItemType Directory -Force dist\scripts | Out-Null
           Copy-Item cherrycctv.exe dist\
-          Copy-Item config.example.json dist\config.json
+          Copy-Item config.example.json dist\
           Copy-Item mediamtx.yml dist\
-          Copy-Item scripts\install.ps1 dist\
+          Copy-Item README.md dist\
+          Copy-Item docs\PRODUCTION.md dist\PRODUCTION.md
+          Copy-Item scripts\*.ps1 dist\scripts\
+          Get-FileHash -Algorithm SHA256 dist\cherrycctv.exe | ForEach-Object { "$($_.Hash.ToLower())  cherrycctv.exe" } | Set-Content -Encoding ascii dist\SHA256SUMS.txt
           Compress-Archive -Path dist\* -DestinationPath cherry-desktop-cctv-windows.zip -Force
       - uses: actions/upload-artifact@v4
         with:
           name: cherry-desktop-cctv-windows
           path: cherry-desktop-cctv-windows.zip
+          if-no-files-found: error
+          retention-days: 30
