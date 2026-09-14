@@ -36,4 +36,7 @@ func TestMediaMTXEnvironmentEnforcesDigest(t *testing.T) {
 	if !strings.Contains(env, "MTX_AUTHINTERNALUSERS_0_IPS=127.0.0.1,::1") {
 		t.Fatal("publisher must be restricted to loopback")
 	}
+	if !strings.Contains(env, "MTX_AUTHINTERNALUSERS_0_PERMISSIONS_1_ACTION=read") {
+		t.Fatal("internal snapshot reader must be loopback-only and credential-free")
+	}
 }
