@@ -28,6 +28,10 @@ func TestHTTPDigest(t *testing.T) {
 	if !ok || stale {
 		t.Fatalf("digest failed: ok=%v stale=%v", ok, stale)
 	}
+	ok, _ = a.VerifyHTTP(req)
+	if ok {
+		t.Fatal("replayed HTTP digest request must be rejected")
+	}
 }
 
 func TestWSSEPasswordDigestAndReplay(t *testing.T) {
