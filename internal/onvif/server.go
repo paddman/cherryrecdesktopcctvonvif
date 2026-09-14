@@ -199,9 +199,6 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 	stream := &url.URL{Scheme: "rtsp", Host: fmt.Sprintf("127.0.0.1:%d", s.cfg.RTSPPort), Path: "/" + s.cfg.RTSPPath}
-	if !s.cfg.InsecureNoAuth {
-		stream.User = url.UserPassword(s.cfg.RTSPUsername, s.cfg.RTSPPassword)
-	}
 	cmd := exec.CommandContext(ctx, s.cfg.FFmpegPath, "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-i", stream.String(), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1")
 	var out bytes.Buffer
 	cmd.Stdout = &out
