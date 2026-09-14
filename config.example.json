@@ -1,0 +1,20 @@
+{
+  "device_name": "Cherry Desktop CCTV",
+  "manufacturer": "Cherry",
+  "model": "DesktopScreen-ONVIF",
+  "serial_number": "CHERRY-SCREEN-001",
+  "firmware_version": "0.1.0",
+  "advertise_ip": "",
+  "onvif_port": 8088,
+  "rtsp_port": 8554,
+  "rtsp_path": "screen",
+  "fps": 15,
+  "video_bitrate": "4000k",
+  "recording_enabled": true,
+  "recording_dir": "recordings",
+  "segment_seconds": 300,
+  "retention_days": 7,
+  "ffmpeg_path": "ffmpeg.exe",
+  "mediamtx_path": "mediamtx.exe",
+  "mediamtx_config": "mediamtx.yml"
+}
