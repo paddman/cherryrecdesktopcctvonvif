@@ -24,6 +24,8 @@ authInternalUsers:
     permissions:
       - action: publish
         path: screen
+      - action: read
+        path: screen
   - user: viewer
     pass: disabled-at-runtime
     ips: []
