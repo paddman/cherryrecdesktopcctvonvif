@@ -1,95 +1,114 @@
 # Cherry Desktop CCTV ONVIF
 
-Turn a Windows desktop into a CCTV-like network video source.
+Cherry Desktop CCTV turns an interactive Windows desktop into a continuously recorded H.264 network-video source that can be discovered by ONVIF-capable NVR/VMS software.
 
-The app continuously captures the desktop with FFmpeg, records rolling MP4 segments, publishes a low-latency H.264 RTSP stream through MediaMTX, and exposes a minimal ONVIF Device/Media service with WS-Discovery so compatible NVR/VMS software can discover the computer like a network camera.
-
-## Architecture
+## Production architecture
 
 ```text
-Windows Desktop
-   | gdigrab
-   v
- FFmpeg --------------------> recordings/*.mp4
-   |
-   +---- H.264/RTSP publish ----> MediaMTX :8554/screen
-                                      ^
-                                      |
-NVR/VMS -- ONVIF discovery --> Cherry ONVIF :3702 UDP
-NVR/VMS -- ONVIF SOAP -------> Cherry ONVIF :8088 TCP
-NVR/VMS -- RTSP -------------> MediaMTX :8554 TCP
+Windows interactive desktop
+        |
+        | FFmpeg gdigrab (single capture + single H.264 encode)
+        v
+   MediaMTX RTSP publisher (loopback only)
+        |
+        +---- RTSP Digest ----> NVR / VMS
+        |
+        +---- fMP4 recording --> recordings/screen/*
+
+NVR / VMS -- WS-Discovery --> UDP 3702
+NVR / VMS -- ONVIF SOAP ---> TCP 8088 (HTTP Digest / WSSE PasswordDigest)
+NVR / VMS -- RTSP ---------> TCP 8554 / RTP UDP
 ```
 
-Important: ONVIF is used for discovery/device/media metadata. The actual video transport is RTSP/RTP, which is also how normal ONVIF CCTV cameras commonly expose their stream.
+The design deliberately separates ONVIF control/discovery from video transport. ONVIF returns the media URI; MediaMTX carries the H.264 stream and performs crash-tolerant fragmented-MP4 recording.
 
-## Implemented MVP
+## Production hardening included
 
-- Windows desktop capture using FFmpeg `gdigrab`
-- H.264 streaming over RTSP/TCP
-- Continuous segmented MP4 recording
-- Automatic retention cleanup by age
-- ONVIF WS-Discovery responder on UDP 3702
-- ONVIF Device service
-  - GetDeviceInformation
-  - GetSystemDateAndTime
-  - GetCapabilities
-  - GetServices
-- ONVIF Media service
-  - GetProfiles
-  - GetProfile
-  - GetStreamUri
-- `/healthz` health endpoint
+- HTTP Digest authentication for ONVIF
+- WS-Security UsernameToken PasswordDigest compatibility with replay rejection
+- RTSP Digest authentication for NVR/VMS readers
+- local publisher restricted to loopback and publish-only permission
+- stable per-device WS-Discovery UUID derived from serial number
+- WS-Discovery Probe and Resolve responses
+- dynamic video profile from configured resolution/FPS/bitrate
+- ONVIF device/media operations used by common NVRs, including stream and snapshot URI
+- single desktop capture / encode pipeline
+- automatic NVIDIA NVENC, Intel QSV, AMD AMF, then x264 fallback probing
+- FFmpeg and MediaMTX watchdog restart with exponential backoff
+- MediaMTX fMP4 recording with 1-second record parts
+- age retention plus maximum recording-size guard
+- `/healthz` and `/readyz`
+- rotating agent logs
+- pinned runtime bootstrap with SHA-256 verification
+- Windows logon Scheduled Task installer with restart policy
+- LocalSubnet-scoped Windows Firewall rules
+- CI format, vet, unit-test and Windows-build gate
 
-## Requirements
+## Install on Windows 10/11 or Windows Server Desktop Experience
 
-- Windows 10/11 or Windows Server with an interactive desktop session
-- Go 1.23+ to build
-- FFmpeg for Windows with `gdigrab` and `libx264`
-- MediaMTX
-
-Place `ffmpeg.exe` and `mediamtx.exe` next to the application or configure their paths in `config.json`.
-
-## Build
+Download the `cherry-desktop-cctv-windows` artifact from GitHub Actions, extract it, then open **PowerShell as Administrator** in the extracted directory:
 
 ```powershell
-Copy-Item config.example.json config.json
-go build -o cherrycctv.exe ./cmd/cherrycctv
-.\cherrycctv.exe -config .\config.json
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install.ps1
 ```
+
+The installer downloads and verifies pinned FFmpeg and MediaMTX binaries when they are not already present. It generates a strong password for the ONVIF/RTSP user on first install and prints that password once.
 
 The default endpoints are:
 
 ```text
-ONVIF Device: http://<PC-IP>:8088/onvif/device_service
-ONVIF Media : http://<PC-IP>:8088/onvif/media_service
-RTSP        : rtsp://<PC-IP>:8554/screen
-Discovery   : UDP 239.255.255.250:3702
+ONVIF Device  http://<PC-IP>:8088/onvif/device_service
+ONVIF Media   http://<PC-IP>:8088/onvif/media_service
+Snapshot      http://<PC-IP>:8088/snapshot.jpg
+RTSP          rtsp://<PC-IP>:8554/screen
+Health        http://<PC-IP>:8088/healthz
+Readiness     http://<PC-IP>:8088/readyz
+Discovery     UDP 239.255.255.250:3702
 ```
 
-To test RTSP directly:
+Use the same username/password created by the installer for ONVIF and RTSP in the NVR/VMS.
+
+## Manual run
+
+For a manual installation, copy `config.example.json` to `config.json`, provide strong credentials either in that file or environment variables, place `ffmpeg.exe` and `mediamtx.exe` alongside the agent, then run:
 
 ```powershell
-ffplay rtsp://<PC-IP>:8554/screen
+$env:CHERRY_ONVIF_PASSWORD = "replace-with-a-long-unique-password"
+$env:CHERRY_RTSP_PASSWORD = $env:CHERRY_ONVIF_PASSWORD
+.\cherrycctv.exe -config .\config.json -check
+.\cherrycctv.exe -config .\config.json
 ```
 
-Run ONVIF without starting FFmpeg/MediaMTX:
+Direct RTSP test:
 
 ```powershell
-.\cherrycctv.exe -config .\config.json -no-capture
+ffplay -rtsp_transport tcp rtsp://admin@<PC-IP>:8554/screen
 ```
 
-## Windows Firewall
+FFplay will prompt or can be supplied a password depending on the build/client. Avoid placing passwords directly in shell history.
 
-Allow inbound UDP 3702 and TCP 8088/8554. See `scripts/install.ps1` for example commands.
+## Important configuration
 
-## Configuration
+- `advertise_ip`: set explicitly on multi-NIC/VPN/Hyper-V/VMware hosts.
+- `width`, `height`, `offset_x`, `offset_y`: desktop region exposed as the camera.
+- `fps`: capture frame rate.
+- `video_bitrate`: e.g. `4000k` or `8m`.
+- `encoder`: `auto`, `h264_nvenc`, `h264_qsv`, `h264_amf`, or `libx264`.
+- `segment_seconds`: fMP4 recording segment duration.
+- `retention_days`: MediaMTX time-based retention.
+- `max_recording_gb`: second disk-usage safety guard.
+- `log_file`, `log_max_mb`, `log_backups`: bounded agent logging.
+- `insecure_allow_no_auth`: laboratory escape hatch only. Keep `false` in production.
 
-`advertise_ip` should be set explicitly on PCs with multiple NICs, VPNs, Hyper-V, VMware, or Docker adapters. If left blank, the app picks the first usable non-loopback IPv4 address.
+## Why this is not installed as a Windows Service
 
-`segment_seconds` controls recording file length. `retention_days` removes old files periodically. Set `recording_enabled` to `false` if the machine should only act as a live screen camera.
+Desktop capture needs the interactive user's desktop. Windows Services run in Session 0 and cannot reliably record that desktop. The production installer therefore uses Task Scheduler at user logon with automatic restart. Turning this into a Session-0 service would be impressively official-looking and functionally wrong, a classic enterprise achievement.
 
-## Current limits
+## ONVIF status
 
-This is an MVP, not yet a full ONVIF Profile S/T implementation. Authentication, Events, Replay/Search, multiple monitors, hardware encoders, audio capture, PTZ-style desktop region control, tray UI, Windows Service packaging, and ONVIF Recording/Search services are not implemented yet.
+This implementation targets practical ONVIF discovery, device/media control and H.264 streaming interoperability. It is **not ONVIF-certified** and does not claim Profile T conformance. Before marketing it as conformant, run the applicable official ONVIF device test suite and complete the ONVIF conformance process.
 
-For a production NVR target, the next milestone should add WS-Security UsernameToken, dynamic monitor resolution in Media profiles, NVIDIA/Intel/AMD hardware encoder selection, a single-capture fan-out pipeline to avoid capturing the desktop twice, and an indexed recording database with playback/replay URI support.
+Profile S is being deprecated, so new compatibility work should target Profile T behavior.
+
+See [`docs/PRODUCTION.md`](docs/PRODUCTION.md) for the deployment and acceptance checklist.

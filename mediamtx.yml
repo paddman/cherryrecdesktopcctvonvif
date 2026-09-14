@@ -1,7 +1,37 @@
 logLevel: info
+logDestinations: [stdout]
+logStructured: false
+
+api: false
+metrics: false
+pprof: false
+rtmp: false
+hls: false
+webrtc: false
+srt: false
+
 rtsp: true
 rtspAddress: :8554
-rtspTransports: [tcp]
+rtspTransports: [tcp, udp]
+rtspEncryption: "no"
+rtspAuthMethods: [digest]
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: ["127.0.0.1", "::1"]
+    permissions:
+      - action: publish
+        path: screen
+  - user: viewer
+    pass: disabled-at-runtime
+    ips: []
+    permissions:
+      - action: read
+        path: screen
+
 paths:
   screen:
     source: publisher
+    overridePublisher: false
