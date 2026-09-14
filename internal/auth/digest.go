@@ -83,7 +83,16 @@ func (a *Authenticator) VerifyHTTP(r *http.Request) (ok bool, stale bool) {
 	} else {
 		expected = md5hex(ha1 + ":" + p["nonce"] + ":" + ha2)
 	}
-	return secureEqual(expected, p["response"]), false
+	if !secureEqual(expected, p["response"]) {
+		return false, false
+	}
+	if p["qop"] != "" {
+		replayKey := "http\x00" + p["username"] + "\x00" + p["nonce"] + "\x00" + p["nc"] + "\x00" + p["cnonce"] + "\x00" + p["uri"]
+		if !a.acceptReplayKey(replayKey, time.Now().UTC()) {
+			return false, false
+		}
+	}
+	return true, false
 }
 
 func (a *Authenticator) VerifyWSSE(body []byte, now time.Time) bool {
