@@ -1,7 +1,7 @@
 logLevel: info
-rtsp: yes
+rtsp: true
 rtspAddress: :8554
-protocols: [tcp]
+rtspTransports: [tcp]
 paths:
   screen:
     source: publisher
