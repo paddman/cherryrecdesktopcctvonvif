@@ -57,6 +57,7 @@ func main() {
 	defer cancel()
 
 	mgr := capture.New(cfg)
+	mgr.SetConfigPath(*configPath)
 	if *check {
 		if *noCapture {
 			log.Printf("configuration valid; capture dependency checks skipped")
@@ -74,6 +75,9 @@ func main() {
 		ready = func() bool { return true }
 	}
 	srv := onvif.New(cfg, ip, ready)
+	if !*noCapture {
+		srv.SetVideoConfigController(mgr)
+	}
 	errCh := make(chan error, 3)
 
 	go func() { errCh <- srv.Run(ctx) }()
