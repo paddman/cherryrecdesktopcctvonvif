@@ -273,7 +273,7 @@ func (m *Manager) ffmpegArgsWithConfig(cfg config.Config, encoder string) []stri
 		return args
 	}
 
-	subURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.publishPath(cfg.SubstreamPath))
+	subURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", cfg.RTSPPort, m.publishPath(cfg.SubstreamPath))
 	filter := fmt.Sprintf("[0:v]%s[osd];[osd]split=2[main][sub];[sub]scale=%d:%d:flags=bicubic[subout]", osd, cfg.SubstreamWidth, cfg.SubstreamHeight)
 	subGOP := strconv.Itoa(cfg.SubstreamFPS * cfg.GOPSeconds)
 
@@ -555,7 +555,6 @@ func minDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-
 func persistVideoConfig(path string, cfg config.Config) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -569,6 +568,7 @@ func persistVideoConfig(path string, cfg config.Config) error {
 	doc["width"] = cfg.Width
 	doc["height"] = cfg.Height
 	doc["video_bitrate"] = cfg.VideoBitrate
+	doc["gop_seconds"] = cfg.GOPSeconds
 	doc["substream_fps"] = cfg.SubstreamFPS
 	doc["substream_width"] = cfg.SubstreamWidth
 	doc["substream_height"] = cfg.SubstreamHeight
