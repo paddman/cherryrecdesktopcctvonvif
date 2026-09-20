@@ -19,6 +19,12 @@ func TestFFmpegUsesSingleCaptureAndNoPublisherSecret(t *testing.T) {
 	if strings.Contains(joined, "@127.0.0.1") {
 		t.Fatalf("publisher secret must not be embedded in command line: %s", joined)
 	}
+	if !strings.Contains(joined, "/screen") || !strings.Contains(joined, "/screen_sub") {
+		t.Fatalf("expected main and sub RTSP outputs from one capture: %s", joined)
+	}
+	if !strings.Contains(joined, "scale=640:360") {
+		t.Fatalf("expected configured substream scale filter: %s", joined)
+	}
 }
 
 func TestMediaMTXEnvironmentEnforcesDigest(t *testing.T) {
@@ -38,5 +44,11 @@ func TestMediaMTXEnvironmentEnforcesDigest(t *testing.T) {
 	}
 	if !strings.Contains(env, "MTX_AUTHINTERNALUSERS_0_PERMISSIONS_1_ACTION=read") {
 		t.Fatal("internal snapshot reader must be loopback-only and credential-free")
+	}
+	if !strings.Contains(env, "MTX_PATHS_SCREEN_SUB_SOURCE=publisher") {
+		t.Fatal("substream path must be configured as a publisher path")
+	}
+	if !strings.Contains(env, "MTX_AUTHINTERNALUSERS_1_PERMISSIONS_1_PATH=screen_sub") {
+		t.Fatal("external RTSP reader must have access to the substream path")
 	}
 }
