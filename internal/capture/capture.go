@@ -70,6 +70,7 @@ func (m *Manager) UpdateConfig(next config.Config, persist bool) error {
 	m.cfg.Width = next.Width
 	m.cfg.Height = next.Height
 	m.cfg.VideoBitrate = next.VideoBitrate
+	m.cfg.GOPSeconds = next.GOPSeconds
 	m.cfg.SubstreamFPS = next.SubstreamFPS
 	m.cfg.SubstreamWidth = next.SubstreamWidth
 	m.cfg.SubstreamHeight = next.SubstreamHeight
