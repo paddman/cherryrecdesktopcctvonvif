@@ -107,7 +107,7 @@ func TestMetadataMediaSerializesONVIFSDP(t *testing.T) {
 	desc := &description.Session{
 		Medias: []*description.Media{newMetadataMedia(107, "trackID=1")},
 	}
-	sdp, err := desc.Marshal()
+	sdp, err := desc.Marshal(false)
 	if err != nil {
 		t.Fatal(err)
 	}
