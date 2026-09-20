@@ -16,12 +16,12 @@ func TestUpdateConfigPersistsOnlyVideoFieldsAndSignalsRestart(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "config.json")
 	initial := map[string]any{
-		"device_name": "Cherry Desktop CCTV",
+		"device_name":    "Cherry Desktop CCTV",
 		"onvif_password": "do-not-touch-this",
-		"custom_field": "keep-me",
-		"fps": 15,
-		"width": 1920,
-		"height": 1080,
+		"custom_field":   "keep-me",
+		"fps":            15,
+		"width":          1920,
+		"height":         1080,
 	}
 	b, _ := json.Marshal(initial)
 	if err := os.WriteFile(path, b, 0o600); err != nil {
