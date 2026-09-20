@@ -23,6 +23,13 @@ type Config struct {
 	ONVIFPort        int    `json:"onvif_port"`
 	RTSPPort         int    `json:"rtsp_port"`
 	RTSPPath         string `json:"rtsp_path"`
+	SubstreamEnabled bool   `json:"substream_enabled"`
+	SubstreamPath    string `json:"substream_path"`
+	SubstreamFPS     int    `json:"substream_fps"`
+	SubstreamWidth   int    `json:"substream_width"`
+	SubstreamHeight  int    `json:"substream_height"`
+	SubstreamBitrate string `json:"substream_bitrate"`
+	SnapshotRefreshMS int   `json:"snapshot_refresh_ms"`
 	FPS              int    `json:"fps"`
 	Width            int    `json:"width"`
 	Height           int    `json:"height"`
@@ -57,7 +64,9 @@ func Default() Config {
 	return Config{
 		DeviceName: "Cherry Desktop CCTV", Manufacturer: "Cherry", Model: "DesktopScreen-ONVIF",
 		SerialNumber: "CHERRY-SCREEN-001", FirmwareVersion: "1.0.0", ONVIFPort: 8088,
-		RTSPPort: 8554, RTSPPath: "screen", FPS: 15, Width: 1920, Height: 1080,
+		RTSPPort: 8554, RTSPPath: "screen", SubstreamEnabled: true, SubstreamPath: "screen_sub",
+		SubstreamFPS: 10, SubstreamWidth: 640, SubstreamHeight: 360, SubstreamBitrate: "800k",
+		SnapshotRefreshMS: 1000, FPS: 15, Width: 1920, Height: 1080,
 		VideoBitrate: "4000k", GOPSeconds: 2, Encoder: "auto",
 		RecordingEnabled: true, RecordingDir: "recordings", SegmentSeconds: 300,
 		RetentionDays: 7, MaxRecordingGB: 500, FFmpegPath: "ffmpeg.exe",
@@ -131,6 +140,29 @@ func (c Config) Validate() error {
 	}
 	if !rtspPathRE.MatchString(c.RTSPPath) {
 		return errors.New("rtsp_path may contain only letters, digits and underscore")
+	}
+	if c.SubstreamEnabled {
+		if !rtspPathRE.MatchString(c.SubstreamPath) {
+			return errors.New("substream_path may contain only letters, digits and underscore")
+		}
+		if c.SubstreamPath == c.RTSPPath {
+			return errors.New("substream_path must differ from rtsp_path")
+		}
+		if c.SubstreamFPS < 1 || c.SubstreamFPS > c.FPS {
+			return errors.New("substream_fps must be between 1 and fps")
+		}
+		if c.SubstreamWidth < 64 || c.SubstreamHeight < 64 || c.SubstreamWidth%2 != 0 || c.SubstreamHeight%2 != 0 {
+			return errors.New("substream_width and substream_height must be even integers >= 64")
+		}
+		if c.SubstreamWidth > c.Width || c.SubstreamHeight > c.Height {
+			return errors.New("substream dimensions cannot exceed main stream dimensions")
+		}
+		if strings.TrimSpace(c.SubstreamBitrate) == "" {
+			return errors.New("substream_bitrate is required when substream is enabled")
+		}
+	}
+	if c.SnapshotRefreshMS < 250 || c.SnapshotRefreshMS > 60000 {
+		return errors.New("snapshot_refresh_ms must be between 250 and 60000")
 	}
 	switch c.Encoder {
 	case "auto", "libx264", "h264_nvenc", "h264_qsv", "h264_amf":
