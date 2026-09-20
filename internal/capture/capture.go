@@ -20,8 +20,9 @@ import (
 )
 
 type Manager struct {
-	cfg   config.Config
-	ready atomic.Bool
+	cfg         config.Config
+	ready       atomic.Bool
+	sourceReady atomic.Bool
 }
 
 func New(cfg config.Config) *Manager { return &Manager{cfg: cfg} }
@@ -97,6 +98,13 @@ func (m *Manager) Run(ctx context.Context, advertiseIP string) error {
 		return fmt.Errorf("MediaMTX readiness: %w", err)
 	}
 
+	if m.cfg.MetadataEnabled {
+		go m.superviseMetadataRelay(ctx, m.rawPath(m.cfg.RTSPPath), m.cfg.RTSPPath, true)
+		if m.cfg.SubstreamEnabled {
+			go m.superviseMetadataRelay(ctx, m.rawPath(m.cfg.SubstreamPath), m.cfg.SubstreamPath, false)
+		}
+	}
+
 	m.superviseFFmpeg(ctx, encoder, advertiseIP)
 	return nil
 }
@@ -131,6 +139,7 @@ func (m *Manager) superviseMediaMTX(ctx context.Context) {
 func (m *Manager) superviseFFmpeg(ctx context.Context, encoder, advertiseIP string) {
 	backoff := time.Second
 	for ctx.Err() == nil {
+		m.sourceReady.Store(false)
 		m.ready.Store(false)
 		args := m.ffmpegArgs(encoder)
 		cmd := exec.CommandContext(ctx, m.cfg.FFmpegPath, args...)
@@ -138,10 +147,15 @@ func (m *Manager) superviseFFmpeg(ctx context.Context, encoder, advertiseIP stri
 		if err := cmd.Start(); err != nil {
 			log.Printf("FFmpeg start failed: %v", err)
 		} else {
-			m.ready.Store(true)
-			log.Printf("screen stream online rtsp://%s:%d/%s", advertiseIP, m.cfg.RTSPPort, m.cfg.RTSPPath)
+			m.sourceReady.Store(true)
+			if !m.cfg.MetadataEnabled {
+				m.ready.Store(true)
+			}
+			log.Printf("screen capture source online rtsp://127.0.0.1:%d/%s public=rtsp://%s:%d/%s metadata=%t",
+				m.cfg.RTSPPort, m.publishPath(m.cfg.RTSPPath), advertiseIP, m.cfg.RTSPPort, m.cfg.RTSPPath, m.cfg.MetadataEnabled)
 			started := time.Now()
 			err := cmd.Wait()
+			m.sourceReady.Store(false)
 			m.ready.Store(false)
 			if ctx.Err() != nil {
 				return
@@ -159,7 +173,7 @@ func (m *Manager) superviseFFmpeg(ctx context.Context, encoder, advertiseIP stri
 }
 
 func (m *Manager) ffmpegArgs(encoder string) []string {
-	mainURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.cfg.RTSPPath)
+	mainURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.publishPath(m.cfg.RTSPPath))
 	args := []string{
 		"-hide_banner", "-loglevel", "warning", "-nostdin",
 		"-f", "gdigrab", "-draw_mouse", "1", "-framerate", strconv.Itoa(m.cfg.FPS),
@@ -179,7 +193,7 @@ func (m *Manager) ffmpegArgs(encoder string) []string {
 		return args
 	}
 
-	subURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.cfg.SubstreamPath)
+	subURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.publishPath(m.cfg.SubstreamPath))
 	filter := fmt.Sprintf("[0:v]%s[osd];[osd]split=2[main][sub];[sub]scale=%d:%d:flags=bicubic[subout]", osd, m.cfg.SubstreamWidth, m.cfg.SubstreamHeight)
 	subGOP := strconv.Itoa(m.cfg.SubstreamFPS * m.cfg.GOPSeconds)
 
@@ -270,8 +284,30 @@ func (m *Manager) probeEncoder(parent context.Context, encoder string) error {
 	return exec.CommandContext(ctx, m.cfg.FFmpegPath, args...).Run()
 }
 
+func (m *Manager) publishPath(publicPath string) string {
+	if !m.cfg.MetadataEnabled {
+		return publicPath
+	}
+	return m.rawPath(publicPath)
+}
+
+func (m *Manager) rawPath(publicPath string) string {
+	return publicPath + "_raw"
+}
+
+func pathEnvKey(path string) string {
+	return strings.ToUpper(path)
+}
+
+func appendPermission(env []string, userIndex, permissionIndex int, action, path string) []string {
+	prefix := fmt.Sprintf("MTX_AUTHINTERNALUSERS_%d_PERMISSIONS_%d_", userIndex, permissionIndex)
+	return append(env,
+		prefix+"ACTION="+action,
+		prefix+"PATH="+path,
+	)
+}
+
 func (m *Manager) mediaMTXEnv() []string {
-	pathKey := strings.ToUpper(m.cfg.RTSPPath)
 	env := []string{
 		"MTX_RTSPADDRESS=:" + strconv.Itoa(m.cfg.RTSPPort),
 		"MTX_RTSPTRANSPORTS=tcp,udp",
@@ -279,29 +315,43 @@ func (m *Manager) mediaMTXEnv() []string {
 		"MTX_AUTHINTERNALUSERS_0_USER=any",
 		"MTX_AUTHINTERNALUSERS_0_PASS=",
 		"MTX_AUTHINTERNALUSERS_0_IPS=127.0.0.1,::1",
-		"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_ACTION=publish",
-		"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_PATH=" + m.cfg.RTSPPath,
-		"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_1_ACTION=read",
-		"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_1_PATH=" + m.cfg.RTSPPath,
 		"MTX_AUTHINTERNALUSERS_1_USER=" + m.cfg.RTSPUsername,
 		"MTX_AUTHINTERNALUSERS_1_PASS=" + m.cfg.RTSPPassword,
-		"MTX_AUTHINTERNALUSERS_1_PERMISSIONS_0_ACTION=read",
-		"MTX_AUTHINTERNALUSERS_1_PERMISSIONS_0_PATH=" + m.cfg.RTSPPath,
-		"MTX_PATHS_" + pathKey + "_SOURCE=publisher",
 	}
 
+	internalPermissions := 0
+	addInternal := func(action, path string) {
+		env = appendPermission(env, 0, internalPermissions, action, path)
+		internalPermissions++
+	}
+	externalPermissions := 0
+	addExternalRead := func(path string) {
+		env = appendPermission(env, 1, externalPermissions, "read", path)
+		externalPermissions++
+	}
+
+	publicPaths := []string{m.cfg.RTSPPath}
 	if m.cfg.SubstreamEnabled {
-		subKey := strings.ToUpper(m.cfg.SubstreamPath)
-		env = append(env,
-			"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_2_ACTION=publish",
-			"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_2_PATH="+m.cfg.SubstreamPath,
-			"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_3_ACTION=read",
-			"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_3_PATH="+m.cfg.SubstreamPath,
-			"MTX_AUTHINTERNALUSERS_1_PERMISSIONS_1_ACTION=read",
-			"MTX_AUTHINTERNALUSERS_1_PERMISSIONS_1_PATH="+m.cfg.SubstreamPath,
-			"MTX_PATHS_"+subKey+"_SOURCE=publisher",
-			"MTX_PATHS_"+subKey+"_RECORD=false",
-		)
+		publicPaths = append(publicPaths, m.cfg.SubstreamPath)
+	}
+
+	for _, publicPath := range publicPaths {
+		sourcePath := m.publishPath(publicPath)
+		addInternal("publish", sourcePath)
+		addInternal("read", sourcePath)
+		if m.cfg.MetadataEnabled {
+			addInternal("publish", publicPath)
+			addInternal("read", publicPath)
+		}
+		addExternalRead(publicPath)
+
+		env = append(env, "MTX_PATHS_"+pathEnvKey(sourcePath)+"_SOURCE=publisher")
+		if m.cfg.MetadataEnabled {
+			env = append(env,
+				"MTX_PATHS_"+pathEnvKey(publicPath)+"_SOURCE=publisher",
+				"MTX_PATHS_"+pathEnvKey(publicPath)+"_RECORD=false",
+			)
+		}
 	}
 
 	if m.cfg.InsecureNoAuth {
@@ -310,18 +360,25 @@ func (m *Manager) mediaMTXEnv() []string {
 			"MTX_AUTHINTERNALUSERS_1_PASS=",
 		)
 	}
+
+	recordPathName := m.publishPath(m.cfg.RTSPPath)
+	recordKey := pathEnvKey(recordPathName)
 	if m.cfg.RecordingEnabled {
-		recordPath := filepath.Join(m.cfg.RecordingAbsPath(), "%path", "%Y-%m-%d_%H-%M-%S-%f")
+		recordPath := filepath.Join(m.cfg.RecordingAbsPath(), m.cfg.RTSPPath, "%Y-%m-%d_%H-%M-%S-%f")
 		env = append(env,
-			"MTX_PATHS_"+pathKey+"_RECORD=true",
-			"MTX_PATHS_"+pathKey+"_RECORDPATH="+recordPath,
-			"MTX_PATHS_"+pathKey+"_RECORDFORMAT=fmp4",
-			"MTX_PATHS_"+pathKey+"_RECORDPARTDURATION=1s",
-			"MTX_PATHS_"+pathKey+"_RECORDSEGMENTDURATION="+strconv.Itoa(m.cfg.SegmentSeconds)+"s",
-			"MTX_PATHS_"+pathKey+"_RECORDDELETEAFTER="+strconv.Itoa(m.cfg.RetentionDays*24)+"h",
+			"MTX_PATHS_"+recordKey+"_RECORD=true",
+			"MTX_PATHS_"+recordKey+"_RECORDPATH="+recordPath,
+			"MTX_PATHS_"+recordKey+"_RECORDFORMAT=fmp4",
+			"MTX_PATHS_"+recordKey+"_RECORDPARTDURATION=1s",
+			"MTX_PATHS_"+recordKey+"_RECORDSEGMENTDURATION="+strconv.Itoa(m.cfg.SegmentSeconds)+"s",
+			"MTX_PATHS_"+recordKey+"_RECORDDELETEAFTER="+strconv.Itoa(m.cfg.RetentionDays*24)+"h",
 		)
 	} else {
-		env = append(env, "MTX_PATHS_"+pathKey+"_RECORD=false")
+		env = append(env, "MTX_PATHS_"+recordKey+"_RECORD=false")
+	}
+
+	if m.cfg.SubstreamEnabled {
+		env = append(env, "MTX_PATHS_"+pathEnvKey(m.publishPath(m.cfg.SubstreamPath))+"_RECORD=false")
 	}
 	return env
 }
