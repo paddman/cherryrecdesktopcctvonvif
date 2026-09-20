@@ -101,7 +101,7 @@ func TestMedia2ProfilesAndStreamURI(t *testing.T) {
 
 func TestSnapshotServesCachedJPEG(t *testing.T) {
 	s := New(testConfig(), "127.0.0.1", func() bool { return true })
-	s.snapshot = []byte{0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9}
+	s.snapshotJPEG = []byte{0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9}
 	s.snapshotUpdated = time.Now()
 	req := httptest.NewRequest(http.MethodGet, "/snapshot.jpg", nil)
 	rr := httptest.NewRecorder()
