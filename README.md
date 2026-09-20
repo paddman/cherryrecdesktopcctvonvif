@@ -11,12 +11,14 @@ Windows interactive desktop
         v
    MediaMTX RTSP publisher (loopback only)
         |
-        +---- RTSP Digest ----> NVR / VMS
+        +---- main H.264 /screen ----> NVR / VMS
         |
-        +---- fMP4 recording --> recordings/screen/*
+        +---- sub H.264 /screen_sub -> NVR / VMS
+        |
+        +---- fMP4 recording --------> recordings/screen/*
 
 NVR / VMS -- WS-Discovery --> UDP 3702
-NVR / VMS -- ONVIF SOAP ---> TCP 8088 (HTTP Digest / WSSE PasswordDigest)
+NVR / VMS -- ONVIF SOAP ---> TCP 8088 (Device + Media1 + Media2)
 NVR / VMS -- RTSP ---------> TCP 8554 / RTP UDP
 ```
 
@@ -30,9 +32,12 @@ The design deliberately separates ONVIF control/discovery from video transport. 
 - local publisher restricted to loopback and publish-only permission
 - stable per-device WS-Discovery UUID derived from serial number
 - WS-Discovery Probe and Resolve responses
-- dynamic video profile from configured resolution/FPS/bitrate
+- dynamic video profiles from configured resolution/FPS/bitrate
+- ONVIF Media1 plus a Media2 interoperability baseline for profiles, stream URI, snapshot URI and encoder discovery
+- main + substream ONVIF profiles backed by one desktop capture pipeline
+- one long-lived snapshot cache worker instead of spawning FFmpeg for every snapshot request
 - ONVIF device/media operations used by common NVRs, including stream and snapshot URI
-- single desktop capture / encode pipeline
+- single desktop capture with dual H.264 encode outputs when substream is enabled
 - automatic NVIDIA NVENC, Intel QSV, AMD AMF, then x264 fallback probing
 - FFmpeg and MediaMTX watchdog restart with exponential backoff
 - MediaMTX fMP4 recording with 1-second record parts
@@ -60,8 +65,10 @@ The default endpoints are:
 ```text
 ONVIF Device  http://<PC-IP>:8088/onvif/device_service
 ONVIF Media   http://<PC-IP>:8088/onvif/media_service
+ONVIF Media2  http://<PC-IP>:8088/onvif/media2_service
 Snapshot      http://<PC-IP>:8088/snapshot.jpg
-RTSP          rtsp://<PC-IP>:8554/screen
+RTSP main     rtsp://<PC-IP>:8554/screen
+RTSP sub      rtsp://<PC-IP>:8554/screen_sub
 Health        http://<PC-IP>:8088/healthz
 Readiness     http://<PC-IP>:8088/readyz
 Discovery     UDP 239.255.255.250:3702
@@ -92,8 +99,11 @@ FFplay will prompt or can be supplied a password depending on the build/client. 
 
 - `advertise_ip`: set explicitly on multi-NIC/VPN/Hyper-V/VMware hosts.
 - `width`, `height`, `offset_x`, `offset_y`: desktop region exposed as the camera.
-- `fps`: capture frame rate.
-- `video_bitrate`: e.g. `4000k` or `8m`.
+- `fps`: main capture/output frame rate.
+- `video_bitrate`: main stream bitrate, e.g. `4000k` or `8m`.
+- `substream_enabled`: enable the lower-bandwidth second ONVIF/RTSP profile.
+- `substream_path`, `substream_width`, `substream_height`, `substream_fps`, `substream_bitrate`: substream settings.
+- `snapshot_refresh_ms`: refresh interval for the long-lived in-memory JPEG snapshot cache.
 - `encoder`: `auto`, `h264_nvenc`, `h264_qsv`, `h264_amf`, or `libx264`.
 - `segment_seconds`: fMP4 recording segment duration.
 - `retention_days`: MediaMTX time-based retention.
@@ -107,7 +117,7 @@ Desktop capture needs the interactive user's desktop. Windows Services run in Se
 
 ## ONVIF status
 
-This implementation targets practical ONVIF discovery, device/media control and H.264 streaming interoperability. It is **not ONVIF-certified** and does not claim Profile T conformance. Before marketing it as conformant, run the applicable official ONVIF device test suite and complete the ONVIF conformance process.
+This implementation targets practical ONVIF discovery, Device/Media1 control, a Media2 interoperability baseline, and H.264 streaming interoperability. Media2 support is intentionally partial and does not yet include the full configuration/event/metadata/OSD surface. It is **not ONVIF-certified** and does not claim Profile T conformance. Before marketing it as conformant, run the applicable official ONVIF device test suite and complete the ONVIF conformance process.
 
 Profile S is being deprecated, so new compatibility work should target Profile T behavior.
 

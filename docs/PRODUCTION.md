@@ -25,7 +25,11 @@ Do not replace them with arbitrary binaries in production without testing `cherr
 
 ## Recording durability
 
-FFmpeg captures and encodes the desktop exactly once. MediaMTX receives that H.264 stream and performs fragmented-MP4 recording. `recordPartDuration` is set to 1 second, limiting the normal crash-recovery loss window to approximately the currently open part. Recording age retention is handled by MediaMTX and `max_recording_gb` adds a second disk quota guard in CherryCCTV.
+FFmpeg captures the desktop exactly once. When the substream is enabled, that single capture is split into main and lower-resolution H.264 outputs before both are published to MediaMTX. Only the main path is recorded by default. MediaMTX performs fragmented-MP4 recording. `recordPartDuration` is set to 1 second, limiting the normal crash-recovery loss window to approximately the currently open part. Recording age retention is handled by MediaMTX and `max_recording_gb` adds a second disk quota guard in CherryCCTV.
+
+## Snapshot cache
+
+A long-lived FFmpeg reader consumes the loopback main RTSP stream and refreshes an in-memory JPEG cache at `snapshot_refresh_ms`. HTTP snapshot requests are served from that cache, so NVR thumbnail polling does not create a new FFmpeg process for every request.
 
 ## Health monitoring
 
@@ -40,7 +44,7 @@ Set `advertise_ip` explicitly on hosts with VPN, Hyper-V, VMware, Docker, multip
 
 ## ONVIF scope
 
-This project implements the ONVIF device/media operations needed by common NVR/VMS discovery and H.264 streaming workflows, including discovery, device information, capabilities, profiles, encoder/source metadata, stream URI and snapshot URI.
+This project implements the ONVIF device/media operations needed by common NVR/VMS discovery and H.264 streaming workflows, including discovery, device information, capabilities, Media1 profiles, a Media2 interoperability baseline, encoder/source metadata, profile-aware stream URIs and snapshot URI. The default configuration exposes a main profile and a lower-bandwidth substream profile.
 
 It is **not an ONVIF-certified product** and must not be marketed with an ONVIF profile conformance claim until it passes the official ONVIF device test tooling and the product has completed the applicable ONVIF conformance process. Profile S is also in deprecation; new compatibility work should target Profile T behavior.
 
@@ -50,9 +54,11 @@ It is **not an ONVIF-certified product** and must not be marketed with an ONVIF 
 2. `/healthz` returns 200.
 3. `/readyz` returns 200 for at least 30 minutes.
 4. NVR discovers the device via ONVIF and authenticates successfully.
-5. NVR opens RTSP with Digest auth and maintains a 24-hour stream soak test.
-6. Recordings survive forced termination/restart and remain playable.
-7. Retention removes old data and disk quota never exceeds the configured threshold for sustained periods.
-8. Reboot + user logon automatically restarts the agent.
-9. Multi-NIC deployments verify that XAddr and RTSP URI contain the intended management IP.
-10. Credentials are unique per endpoint/device and not shared across customer installations.
+5. NVR opens both main and sub RTSP profiles with Digest auth and maintains a 24-hour stream soak test.
+6. Media2-capable clients can call GetProfiles and GetStreamUri for both profiles.
+7. Snapshot polling for at least 30 minutes does not spawn one FFmpeg process per HTTP request and returns fresh JPEG data.
+8. Recordings survive forced termination/restart and remain playable.
+9. Retention removes old data and disk quota never exceeds the configured threshold for sustained periods.
+10. Reboot + user logon automatically restarts the agent.
+11. Multi-NIC deployments verify that XAddr and RTSP URI contain the intended management IP.
+12. Credentials are unique per endpoint/device and not shared across customer installations.
