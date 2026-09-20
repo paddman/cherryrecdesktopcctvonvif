@@ -31,6 +31,7 @@ type Server struct {
 	snapshotMu      sync.RWMutex
 	snapshotJPEG    []byte
 	snapshotUpdated time.Time
+	events          *eventBroker
 }
 
 func New(cfg config.Config, ip string, ready func() bool) *Server {
@@ -38,6 +39,7 @@ func New(cfg config.Config, ip string, ready func() bool) *Server {
 		ready = func() bool { return true }
 	}
 	s := &Server{cfg: cfg, ip: ip, ready: ready, uuid: stableUUID(cfg.SerialNumber)}
+	s.events = newEventBroker(ready)
 	if !cfg.InsecureNoAuth {
 		s.auth = cherryAuth.New(cfg.ONVIFUsername, cfg.ONVIFPassword, cfg.AuthRealm)
 	}
@@ -69,6 +71,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/onvif/device_service", s.device)
 	mux.HandleFunc("/onvif/media_service", s.media)
 	mux.HandleFunc("/onvif/media2_service", s.media2)
+	mux.HandleFunc("/onvif/events_service", s.eventsService)
+	mux.HandleFunc("/onvif/pullpoint/", s.pullPointService)
 	mux.HandleFunc("/snapshot.jpg", s.snapshot)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -87,13 +91,14 @@ func (s *Server) Run(ctx context.Context) error {
 	})
 
 	go s.snapshotLoop(ctx)
+	go s.events.run(ctx)
 
 	srv := &http.Server{
 		Addr:              s.Addr(),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		WriteTimeout:      70 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
@@ -130,9 +135,9 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UTC()
 		s.soap(w, fmt.Sprintf(`<tds:GetSystemDateAndTimeResponse><tds:SystemDateAndTime><tt:DateTimeType>NTP</tt:DateTimeType><tt:DaylightSavings>false</tt:DaylightSavings><tt:UTCDateTime><tt:Time><tt:Hour>%d</tt:Hour><tt:Minute>%d</tt:Minute><tt:Second>%d</tt:Second></tt:Time><tt:Date><tt:Year>%d</tt:Year><tt:Month>%d</tt:Month><tt:Day>%d</tt:Day></tt:Date></tt:UTCDateTime></tds:SystemDateAndTime></tds:GetSystemDateAndTimeResponse>`, now.Hour(), now.Minute(), now.Second(), now.Year(), int(now.Month()), now.Day()))
 	case "GetCapabilities":
-		s.soap(w, fmt.Sprintf(`<tds:GetCapabilitiesResponse><tds:Capabilities><tt:Device><tt:XAddr>%s</tt:XAddr></tt:Device><tt:Media><tt:XAddr>%s</tt:XAddr><tt:StreamingCapabilities><tt:RTPMulticast>false</tt:RTPMulticast><tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP></tt:StreamingCapabilities></tt:Media></tds:Capabilities></tds:GetCapabilitiesResponse>`, s.DeviceURL(), s.MediaURL()))
+		s.soap(w, fmt.Sprintf(`<tds:GetCapabilitiesResponse><tds:Capabilities><tt:Device><tt:XAddr>%s</tt:XAddr></tt:Device><tt:Media><tt:XAddr>%s</tt:XAddr><tt:StreamingCapabilities><tt:RTPMulticast>false</tt:RTPMulticast><tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP></tt:StreamingCapabilities></tt:Media><tt:Events><tt:XAddr>%s</tt:XAddr><tt:WSSubscriptionPolicySupport>false</tt:WSSubscriptionPolicySupport><tt:WSPullPointSupport>true</tt:WSPullPointSupport><tt:WSPausableSubscriptionManagerInterfaceSupport>false</tt:WSPausableSubscriptionManagerInterfaceSupport></tt:Events></tds:Capabilities></tds:GetCapabilitiesResponse>`, s.DeviceURL(), s.MediaURL(), s.EventURL()))
 	case "GetServices":
-		s.soap(w, fmt.Sprintf(`<tds:GetServicesResponse><tds:Service><tds:Namespace>http://www.onvif.org/ver10/device/wsdl</tds:Namespace><tds:XAddr>%s</tds:XAddr><tds:Version><tt:Major>2</tt:Major><tt:Minor>6</tt:Minor></tds:Version></tds:Service><tds:Service><tds:Namespace>http://www.onvif.org/ver10/media/wsdl</tds:Namespace><tds:XAddr>%s</tds:XAddr><tds:Version><tt:Major>2</tt:Major><tt:Minor>6</tt:Minor></tds:Version></tds:Service><tds:Service><tds:Namespace>http://www.onvif.org/ver20/media/wsdl</tds:Namespace><tds:XAddr>%s</tds:XAddr><tds:Version><tt:Major>2</tt:Major><tt:Minor>6</tt:Minor></tds:Version></tds:Service></tds:GetServicesResponse>`, s.DeviceURL(), s.MediaURL(), s.Media2URL()))
+		s.soap(w, fmt.Sprintf(`<tds:GetServicesResponse><tds:Service><tds:Namespace>http://www.onvif.org/ver10/device/wsdl</tds:Namespace><tds:XAddr>%s</tds:XAddr><tds:Version><tt:Major>2</tt:Major><tt:Minor>6</tt:Minor></tds:Version></tds:Service><tds:Service><tds:Namespace>http://www.onvif.org/ver10/media/wsdl</tds:Namespace><tds:XAddr>%s</tds:XAddr><tds:Version><tt:Major>2</tt:Major><tt:Minor>6</tt:Minor></tds:Version></tds:Service><tds:Service><tds:Namespace>http://www.onvif.org/ver20/media/wsdl</tds:Namespace><tds:XAddr>%s</tds:XAddr><tds:Version><tt:Major>2</tt:Major><tt:Minor>6</tt:Minor></tds:Version></tds:Service><tds:Service><tds:Namespace>http://www.onvif.org/ver10/events/wsdl</tds:Namespace><tds:XAddr>%s</tds:XAddr><tds:Version><tt:Major>2</tt:Major><tt:Minor>6</tt:Minor></tds:Version></tds:Service></tds:GetServicesResponse>`, s.DeviceURL(), s.MediaURL(), s.Media2URL(), s.EventURL()))
 	case "GetScopes":
 		name := url.PathEscape(strings.ReplaceAll(s.cfg.DeviceName, " ", "_"))
 		s.soap(w, fmt.Sprintf(`<tds:GetScopesResponse><tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef><tt:ScopeItem>onvif://www.onvif.org/type/video_encoder</tt:ScopeItem></tds:Scopes><tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef><tt:ScopeItem>onvif://www.onvif.org/Profile/Streaming</tt:ScopeItem></tds:Scopes><tds:Scopes><tt:ScopeDef>Configurable</tt:ScopeDef><tt:ScopeItem>onvif://www.onvif.org/name/%s</tt:ScopeItem></tds:Scopes></tds:GetScopesResponse>`, name))
@@ -300,8 +305,11 @@ func (s *Server) media2(w http.ResponseWriter, r *http.Request) {
 		total := s.profileCount()
 		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetVideoEncoderInstancesResponse><tr2:Info><tr2:Codec><tr2:Encoding>H264</tr2:Encoding><tr2:Number>%d</tr2:Number></tr2:Codec><tr2:Total>%d</tr2:Total></tr2:Info></tr2:GetVideoEncoderInstancesResponse>`, total, total))
 	case "GetServiceCapabilities":
-		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetServiceCapabilitiesResponse><tr2:Capabilities MaximumNumberOfProfiles="%d" ConfigurationsSupported="VideoSource VideoEncoder" SnapshotUri="true" Rotation="false" VideoSourceMode="false" OSD="false" TemporaryOSDText="false" Mask="false" RTSPStreaming="true" SecureRTSPStreaming="false" RTPMulticast="false" RTP_RTSP_TCP="true" AutoStartMulticast="false" MultiTrackStreaming="false"/></tr2:GetServiceCapabilitiesResponse>`, s.profileCount()))
+		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetServiceCapabilitiesResponse><tr2:Capabilities MaximumNumberOfProfiles="%d" ConfigurationsSupported="VideoSource VideoEncoder" SnapshotUri="true" Rotation="false" VideoSourceMode="false" OSD="true" TemporaryOSDText="false" Mask="false" RTSPStreaming="true" SecureRTSPStreaming="false" RTPMulticast="false" RTP_RTSP_TCP="true" AutoStartMulticast="false" MultiTrackStreaming="false"/></tr2:GetServiceCapabilitiesResponse>`, s.profileCount()))
 	default:
+		if s.handleMedia2OSD(w, action, body) {
+			return
+		}
 		s.fault(w, "ter:ActionNotSupported", "Unsupported ONVIF Media2 action: "+action)
 	}
 }
