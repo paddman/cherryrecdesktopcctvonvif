@@ -7,15 +7,22 @@ Cherry Desktop CCTV turns an interactive Windows desktop into a continuously rec
 ```text
 Windows interactive desktop
         |
-        | FFmpeg gdigrab (single capture + single H.264 encode)
+        | FFmpeg gdigrab (single capture)
         v
-   MediaMTX RTSP publisher (loopback only)
+   raw H.264 publishers (loopback only)
         |
-        +---- main H.264 /screen ----> NVR / VMS
+        +---- /screen_raw --------+---- fMP4 recording --> recordings/screen/*
+        |                         |
+        |                         v
+        |                  Go RTP metadata relay
+        |                         |
+        |                         +---- H264/90000
+        |                         +---- vnd.onvif.metadata/90000
+        |                         |
+        |                         v
+        |                    public /screen ----> NVR / VMS
         |
-        +---- sub H.264 /screen_sub -> NVR / VMS
-        |
-        +---- fMP4 recording --------> recordings/screen/*
+        +---- /screen_sub_raw ----> metadata relay ----> public /screen_sub
 
 NVR / VMS -- WS-Discovery --> UDP 3702
 NVR / VMS -- ONVIF SOAP ---> TCP 8088 (Device + Media1 + Media2 + Events)
@@ -36,6 +43,8 @@ The design deliberately separates ONVIF control/discovery from video transport. 
 - dynamic video profiles from configured resolution/FPS/bitrate
 - ONVIF Media1 plus a Media2 interoperability baseline for profiles, stream URI, snapshot URI and encoder discovery
 - ONVIF Event Service with PullPoint subscriptions, synchronization points, renew/unsubscribe and VideoLoss property events
+- RTP ONVIF metadata track using dynamic payload type, 90 kHz clock, closed `tt:MetaDataStream` XML documents and VideoLoss EventStream data
+- Media1/Media2 metadata configuration discovery attached to both public stream profiles
 - Media2 text OSD lifecycle (Create/Get/Set/Delete/GetOptions) backed by a live FFmpeg drawtext text file
 - main + substream ONVIF profiles backed by one desktop capture pipeline
 - one long-lived snapshot cache worker instead of spawning FFmpeg for every snapshot request
@@ -110,6 +119,9 @@ FFplay will prompt or can be supplied a password depending on the build/client. 
 - `snapshot_refresh_ms`: refresh interval for the long-lived in-memory JPEG snapshot cache.
 - `osd_text_file`: persistent text file used by the ONVIF Media2 OSD API and live FFmpeg overlay.
 - `osd_font_file`, `osd_font_size`: font used for the text OSD. The current baseline intentionally exposes only a single UpperLeft plain-text OSD so the advertised options exactly match what the renderer can apply.
+- `metadata_enabled`: publish an ONVIF metadata RTP track alongside H.264 on each public RTSP profile.
+- `metadata_interval_ms`: interval between closed metadata XML documents; defaults to 1000 ms.
+- `metadata_payload_type`: dynamic RTP payload type for `vnd.onvif.metadata/90000`; defaults to 107 and must be 96-127.
 - `encoder`: `auto`, `h264_nvenc`, `h264_qsv`, `h264_amf`, or `libx264`.
 - `segment_seconds`: fMP4 recording segment duration.
 - `retention_days`: MediaMTX time-based retention.
@@ -123,7 +135,7 @@ Desktop capture needs the interactive user's desktop. Windows Services run in Se
 
 ## ONVIF status
 
-This implementation targets practical ONVIF discovery, Device/Media1 control, a Media2 interoperability baseline, PullPoint events, text OSD, and H.264 streaming interoperability. Media2 support is intentionally partial and does not yet include an ONVIF RTP metadata track or the complete Profile T surface. It is **not ONVIF-certified** and does not claim Profile T conformance. Before marketing it as conformant, run the applicable official ONVIF device test suite and complete the ONVIF conformance process.
+This implementation targets practical ONVIF discovery, Device/Media1 control, a Media2 interoperability baseline, PullPoint events, text OSD, H.264 streaming, and an ONVIF RTP metadata track on public RTSP profiles. The metadata relay advertises `vnd.onvif.metadata/90000` and emits closed `tt:MetaDataStream` documents with VideoLoss property events. It is **not ONVIF-certified** and does not claim Profile T conformance. RTP metadata support removes one major gap, but official ONVIF device testing and the remaining mandatory Profile T behavior still determine conformance. Before marketing it as conformant, run the applicable official ONVIF device test suite and complete the ONVIF conformance process.
 
 Profile S is being deprecated, so new compatibility work should target Profile T behavior.
 
