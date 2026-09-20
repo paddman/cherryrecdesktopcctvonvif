@@ -46,6 +46,8 @@ if (-not (Test-Path $configPath)) {
   $cfg.mediamtx_path = (Join-Path $InstallDir "mediamtx.exe")
   $cfg.mediamtx_config = (Join-Path $InstallDir "mediamtx.yml")
   $cfg.log_file = (Join-Path $InstallDir "logs\cherrycctv.log")
+  $cfg.osd_text_file = (Join-Path $InstallDir "osd.txt")
+  $cfg.osd_font_file = (Join-Path $env:WINDIR "Fonts\arial.ttf")
   $cfg.onvif_username = $Username
   $cfg.onvif_password = $Password
   $cfg.onvif_password_env = ""
