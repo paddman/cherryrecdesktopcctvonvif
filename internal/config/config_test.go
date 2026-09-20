@@ -30,7 +30,6 @@ func TestValidateInsecureModeForDev(t *testing.T) {
 	}
 }
 
-
 func TestValidateRejectsInvalidSubstream(t *testing.T) {
 	c := Default()
 	c.InsecureNoAuth = true
