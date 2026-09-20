@@ -31,6 +31,14 @@ FFmpeg captures the desktop exactly once. When the substream is enabled, that si
 
 A long-lived FFmpeg reader consumes the loopback main RTSP stream and refreshes an in-memory JPEG cache at `snapshot_refresh_ms`. HTTP snapshot requests are served from that cache, so NVR thumbnail polling does not create a new FFmpeg process for every request.
 
+## ONVIF events
+
+The agent exposes `/onvif/events_service` and supports PullPoint subscriptions. The baseline event topic is `tns1:VideoSource/VideoLoss`; a readiness transition produces a Changed property event, and `SetSynchronizationPoint` produces the current state with PropertyOperation=Initialized. PullPoint subscriptions expire and support Renew and Unsubscribe.
+
+## Text OSD
+
+Media2 supports a single plain-text OSD applied to the `screen_source` video source configuration. The renderer uses FFmpeg `drawtext` with `textfile=...:reload=1`, so CreateOSD, SetOSD and DeleteOSD update the visible main and substream without restarting the encoder. The supported position is intentionally limited to UpperLeft and the supported font size is the configured `osd_font_size`; GetOSDOptions advertises only those capabilities.
+
 ## Health monitoring
 
 - `GET /healthz`: agent HTTP process is alive.
@@ -44,7 +52,7 @@ Set `advertise_ip` explicitly on hosts with VPN, Hyper-V, VMware, Docker, multip
 
 ## ONVIF scope
 
-This project implements the ONVIF device/media operations needed by common NVR/VMS discovery and H.264 streaming workflows, including discovery, device information, capabilities, Media1 profiles, a Media2 interoperability baseline, encoder/source metadata, profile-aware stream URIs and snapshot URI. The default configuration exposes a main profile and a lower-bandwidth substream profile.
+This project implements the ONVIF device/media operations needed by common NVR/VMS discovery and H.264 streaming workflows, including discovery, device information, capabilities, Media1 profiles, a Media2 interoperability baseline, PullPoint event handling, text OSD, encoder/source metadata, profile-aware stream URIs and snapshot URI. The default configuration exposes a main profile and a lower-bandwidth substream profile.
 
 It is **not an ONVIF-certified product** and must not be marketed with an ONVIF profile conformance claim until it passes the official ONVIF device test tooling and the product has completed the applicable ONVIF conformance process. Profile S is also in deprecation; new compatibility work should target Profile T behavior.
 
@@ -57,8 +65,12 @@ It is **not an ONVIF-certified product** and must not be marketed with an ONVIF 
 5. NVR opens both main and sub RTSP profiles with Digest auth and maintains a 24-hour stream soak test.
 6. Media2-capable clients can call GetProfiles and GetStreamUri for both profiles.
 7. Snapshot polling for at least 30 minutes does not spawn one FFmpeg process per HTTP request and returns fresh JPEG data.
-8. Recordings survive forced termination/restart and remain playable.
-9. Retention removes old data and disk quota never exceeds the configured threshold for sustained periods.
-10. Reboot + user logon automatically restarts the agent.
-11. Multi-NIC deployments verify that XAddr and RTSP URI contain the intended management IP.
-12. Credentials are unique per endpoint/device and not shared across customer installations.
+8. Create a PullPoint subscription, call SetSynchronizationPoint, and verify PullMessages returns the current VideoLoss property state.
+9. Force the capture offline/online and verify the active PullPoint receives a Changed VideoLoss event.
+10. Create, read, update and delete the Media2 text OSD and verify the visible overlay changes on both main and substream.
+11. Recordings survive forced termination/restart and remain playable.
+12. Retention removes old data and disk quota never exceeds the configured threshold for sustained periods.
+13. Reboot + user logon automatically restarts the agent.
+14. Multi-NIC deployments verify that XAddr and RTSP URI contain the intended management IP.
+15. Credentials are unique per endpoint/device and not shared across customer installations.
+16. Do not claim Profile T conformance until an RTP ONVIF metadata track and the remaining mandatory test cases pass the official ONVIF tooling.
