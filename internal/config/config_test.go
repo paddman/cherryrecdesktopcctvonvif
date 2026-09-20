@@ -61,3 +61,33 @@ func TestValidateRejectsInvalidOSDFontSize(t *testing.T) {
 		t.Fatal("expected invalid OSD font size to fail")
 	}
 }
+
+func TestDefaultMetadataSettings(t *testing.T) {
+	c := Default()
+	c.InsecureNoAuth = true
+	if err := c.Validate(); err != nil {
+		t.Fatalf("default metadata settings should validate: %v", err)
+	}
+	if !c.MetadataEnabled || c.MetadataIntervalMS != 1000 || c.MetadataPayloadType != 107 {
+		t.Fatalf("unexpected metadata defaults: %+v", c)
+	}
+}
+
+func TestValidateRejectsInvalidMetadataPayloadType(t *testing.T) {
+	c := Default()
+	c.InsecureNoAuth = true
+	c.MetadataPayloadType = 95
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected invalid metadata RTP payload type to fail")
+	}
+}
+
+func TestValidateRejectsInvalidMetadataInterval(t *testing.T) {
+	c := Default()
+	c.InsecureNoAuth = true
+	c.MetadataIntervalMS = 100
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected invalid metadata interval to fail")
+	}
+}
+
