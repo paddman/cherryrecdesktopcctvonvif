@@ -33,6 +33,9 @@ type Config struct {
 	OSDTextFile       string `json:"osd_text_file"`
 	OSDFontFile       string `json:"osd_font_file"`
 	OSDFontSize       int    `json:"osd_font_size"`
+	MetadataEnabled   bool   `json:"metadata_enabled"`
+	MetadataIntervalMS int   `json:"metadata_interval_ms"`
+	MetadataPayloadType int  `json:"metadata_payload_type"`
 	FPS               int    `json:"fps"`
 	Width             int    `json:"width"`
 	Height            int    `json:"height"`
@@ -71,6 +74,7 @@ func Default() Config {
 		SubstreamFPS: 10, SubstreamWidth: 640, SubstreamHeight: 360, SubstreamBitrate: "800k",
 		SnapshotRefreshMS: 1000, OSDTextFile: "osd.txt",
 		OSDFontFile: "C:\\Windows\\Fonts\\arial.ttf", OSDFontSize: 24,
+		MetadataEnabled: true, MetadataIntervalMS: 1000, MetadataPayloadType: 107,
 		FPS: 15, Width: 1920, Height: 1080,
 		VideoBitrate: "4000k", GOPSeconds: 2, Encoder: "auto",
 		RecordingEnabled: true, RecordingDir: "recordings", SegmentSeconds: 300,
@@ -177,6 +181,14 @@ func (c Config) Validate() error {
 	}
 	if c.OSDFontSize < 8 || c.OSDFontSize > 96 {
 		return errors.New("osd_font_size must be between 8 and 96")
+	}
+	if c.MetadataEnabled {
+		if c.MetadataIntervalMS < 250 || c.MetadataIntervalMS > 5000 {
+			return errors.New("metadata_interval_ms must be between 250 and 5000")
+		}
+		if c.MetadataPayloadType < 96 || c.MetadataPayloadType > 127 {
+			return errors.New("metadata_payload_type must be between 96 and 127")
+		}
 	}
 	switch c.Encoder {
 	case "auto", "libx264", "h264_nvenc", "h264_qsv", "h264_amf":
