@@ -230,6 +230,9 @@ func (s *Server) media(w http.ResponseWriter, r *http.Request) {
 	case "GetServiceCapabilities":
 		s.soap(w, `<trt:GetServiceCapabilitiesResponse><trt:Capabilities SnapshotUri="true" Rotation="false" VideoSourceMode="false" OSD="false" TemporaryOSDText="false" EXICompression="false"/></trt:GetServiceCapabilitiesResponse>`)
 	default:
+		if s.handleMedia1Metadata(w, action, body) {
+			return
+		}
 		s.fault(w, "ter:ActionNotSupported", "Unsupported ONVIF media action: "+action)
 	}
 }
@@ -305,8 +308,15 @@ func (s *Server) media2(w http.ResponseWriter, r *http.Request) {
 		total := s.profileCount()
 		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetVideoEncoderInstancesResponse><tr2:Info><tr2:Codec><tr2:Encoding>H264</tr2:Encoding><tr2:Number>%d</tr2:Number></tr2:Codec><tr2:Total>%d</tr2:Total></tr2:Info></tr2:GetVideoEncoderInstancesResponse>`, total, total))
 	case "GetServiceCapabilities":
-		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetServiceCapabilitiesResponse><tr2:Capabilities MaximumNumberOfProfiles="%d" ConfigurationsSupported="VideoSource VideoEncoder" SnapshotUri="true" Rotation="false" VideoSourceMode="false" OSD="true" TemporaryOSDText="false" Mask="false" RTSPStreaming="true" SecureRTSPStreaming="false" RTPMulticast="false" RTP_RTSP_TCP="true" AutoStartMulticast="false" MultiTrackStreaming="false"/></tr2:GetServiceCapabilitiesResponse>`, s.profileCount()))
+		configurations := "VideoSource VideoEncoder"
+		if s.cfg.MetadataEnabled {
+			configurations += " Metadata"
+		}
+		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetServiceCapabilitiesResponse><tr2:Capabilities MaximumNumberOfProfiles="%d" ConfigurationsSupported="%s" SnapshotUri="true" Rotation="false" VideoSourceMode="false" OSD="true" TemporaryOSDText="false" Mask="false" RTSPStreaming="true" SecureRTSPStreaming="false" RTPMulticast="false" RTP_RTSP_TCP="true" AutoStartMulticast="false" MultiTrackStreaming="%t"/></tr2:GetServiceCapabilitiesResponse>`, s.profileCount(), configurations, s.cfg.MetadataEnabled))
 	default:
+		if s.handleMedia2Metadata(w, action, body) {
+			return
+		}
 		if s.handleMedia2OSD(w, action, body) {
 			return
 		}
@@ -333,7 +343,11 @@ func (s *Server) media2ProfileXML(sub, includeConfig bool) string {
 	}
 	configs := ""
 	if includeConfig {
-		configs = `<tr2:Configurations><tr2:VideoSource token="screen_source"><tt:Name>Desktop</tt:Name><tt:UseCount>` + strconv.Itoa(s.profileCount()) + `</tt:UseCount><tt:SourceToken>desktop</tt:SourceToken><tt:Bounds x="` + strconv.Itoa(s.cfg.OffsetX) + `" y="` + strconv.Itoa(s.cfg.OffsetY) + `" width="` + strconv.Itoa(s.cfg.Width) + `" height="` + strconv.Itoa(s.cfg.Height) + `"/></tr2:VideoSource>` + s.media2EncoderXMLForProfile(sub) + `</tr2:Configurations>`
+		configs = `<tr2:Configurations><tr2:VideoSource token="screen_source"><tt:Name>Desktop</tt:Name><tt:UseCount>` + strconv.Itoa(s.profileCount()) + `</tt:UseCount><tt:SourceToken>desktop</tt:SourceToken><tt:Bounds x="` + strconv.Itoa(s.cfg.OffsetX) + `" y="` + strconv.Itoa(s.cfg.OffsetY) + `" width="` + strconv.Itoa(s.cfg.Width) + `" height="` + strconv.Itoa(s.cfg.Height) + `"/></tr2:VideoSource>` + s.media2EncoderXMLForProfile(sub)
+		if s.cfg.MetadataEnabled {
+			configs += s.metadataConfigurationXML("tr2:Metadata")
+		}
+		configs += `</tr2:Configurations>`
 	}
 	return `<tr2:Profiles token="` + token + `" fixed="true"><tr2:Name>` + xmlEsc(name) + `</tr2:Name>` + configs + `</tr2:Profiles>`
 }
@@ -414,6 +428,7 @@ func (s *Server) snapshotLoop(ctx context.Context) {
 		cmd := exec.CommandContext(ctx, s.cfg.FFmpegPath,
 			"-hide_banner", "-loglevel", "error", "-nostdin",
 			"-rtsp_transport", "tcp", "-i", stream.String(),
+			"-map", "0:v:0",
 			"-vf", fmt.Sprintf("fps=%.3f", rate),
 			"-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
 		)
@@ -595,7 +610,11 @@ func (s *Server) profileXML(sub bool) string {
 		profileToken, profileName = "screen_profile_sub", "Desktop Screen Substream"
 		encoder = s.subEncoderXML("tt:VideoEncoderConfiguration")
 	}
-	return fmt.Sprintf(`<trt:Profile fixed="true" token="%s"><tt:Name>%s</tt:Name><tt:VideoSourceConfiguration token="screen_source"><tt:Name>Desktop</tt:Name><tt:UseCount>%d</tt:UseCount><tt:SourceToken>desktop</tt:SourceToken><tt:Bounds x="%d" y="%d" width="%d" height="%d"/></tt:VideoSourceConfiguration>%s</trt:Profile>`, profileToken, profileName, s.profileCount(), s.cfg.OffsetX, s.cfg.OffsetY, s.cfg.Width, s.cfg.Height, encoder)
+	metadata := ""
+	if s.cfg.MetadataEnabled {
+		metadata = s.metadataConfigurationXML("tt:MetadataConfiguration")
+	}
+	return fmt.Sprintf(`<trt:Profile fixed="true" token="%s"><tt:Name>%s</tt:Name><tt:VideoSourceConfiguration token="screen_source"><tt:Name>Desktop</tt:Name><tt:UseCount>%d</tt:UseCount><tt:SourceToken>desktop</tt:SourceToken><tt:Bounds x="%d" y="%d" width="%d" height="%d"/></tt:VideoSourceConfiguration>%s%s</trt:Profile>`, profileToken, profileName, s.profileCount(), s.cfg.OffsetX, s.cfg.OffsetY, s.cfg.Width, s.cfg.Height, encoder, metadata)
 }
 
 func (s *Server) encoderXML(tag string) string {
