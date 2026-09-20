@@ -57,7 +57,6 @@ func TestSOAPAction(t *testing.T) {
 	}
 }
 
-
 func TestGetProfilesIncludesSubstream(t *testing.T) {
 	s := New(testConfig(), "10.0.0.10", func() bool { return true })
 	req := httptest.NewRequest(http.MethodPost, "/onvif/media_service", strings.NewReader(`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><trt:GetProfiles xmlns:trt="http://www.onvif.org/ver10/media/wsdl"/></s:Body></s:Envelope>`))
