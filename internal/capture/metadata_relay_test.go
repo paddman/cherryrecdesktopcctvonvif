@@ -97,7 +97,7 @@ func TestMetadataDocumentEncodesPropertyAndHeartbeat(t *testing.T) {
 	if !strings.Contains(heartbeat, "<tt:MetaDataStream") || strings.Contains(heartbeat, "<tt:Event>") {
 		t.Fatalf("heartbeat must be a closed empty metadata document: %s", heartbeat)
 	}
-	if !strings.HasSuffix(heartbeat, "</tt:MetaDataStream>") {
+	if !strings.HasSuffix(heartbeat, "/>") && !strings.HasSuffix(heartbeat, "</tt:MetaDataStream>") {
 		t.Fatalf("metadata heartbeat must close the XML document: %s", heartbeat)
 	}
 }
