@@ -271,6 +271,20 @@ func (s *Server) media2(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetSnapshotUriResponse><tr2:Uri>%s</tr2:Uri></tr2:GetSnapshotUriResponse>`, xmlEsc(s.SnapshotURL())))
+	case "GetVideoSourceConfigurations":
+		configurationToken := elementText(body, "ConfigurationToken")
+		if configurationToken != "" && configurationToken != "screen_source" {
+			s.fault(w, "ter:NoConfig", "Unknown video source configuration: "+configurationToken)
+			return
+		}
+		profileToken := elementText(body, "ProfileToken")
+		if profileToken != "" {
+			if _, ok := s.streamURLForProfile(profileToken); !ok {
+				s.fault(w, "ter:NoProfile", "Unknown Media2 profile: "+profileToken)
+				return
+			}
+		}
+		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetVideoSourceConfigurationsResponse><tr2:Configurations token="screen_source"><tt:Name>Desktop</tt:Name><tt:UseCount>%d</tt:UseCount><tt:SourceToken>desktop</tt:SourceToken><tt:Bounds x="%d" y="%d" width="%d" height="%d"/></tr2:Configurations></tr2:GetVideoSourceConfigurationsResponse>`, s.profileCount(), s.cfg.OffsetX, s.cfg.OffsetY, s.cfg.Width, s.cfg.Height))
 	case "GetVideoEncoderConfigurations":
 		xml := s.media2EncoderXML(false)
 		if s.cfg.SubstreamEnabled {
@@ -278,7 +292,13 @@ func (s *Server) media2(w http.ResponseWriter, r *http.Request) {
 		}
 		s.soapMedia2(w, `<tr2:GetVideoEncoderConfigurationsResponse>`+xml+`</tr2:GetVideoEncoderConfigurationsResponse>`)
 	case "GetVideoEncoderInstances":
-		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetVideoEncoderInstancesResponse><tr2:Info><tr2:Total>%d</tr2:Total><tr2:Codec><tt:Encoding>H264</tt:Encoding><tt:Instances>%d</tt:Instances></tr2:Codec></tr2:Info></tr2:GetVideoEncoderInstancesResponse>`, s.profileCount(), s.profileCount()))
+		token := elementText(body, "ConfigurationToken")
+		if token != "" && token != "screen_source" {
+			s.fault(w, "ter:NoConfig", "Unknown video source configuration: "+token)
+			return
+		}
+		total := s.profileCount()
+		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetVideoEncoderInstancesResponse><tr2:Info><tr2:Codec><tr2:Encoding>H264</tr2:Encoding><tr2:Number>%d</tr2:Number></tr2:Codec><tr2:Total>%d</tr2:Total></tr2:Info></tr2:GetVideoEncoderInstancesResponse>`, total, total))
 	case "GetServiceCapabilities":
 		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetServiceCapabilitiesResponse><tr2:Capabilities MaximumNumberOfProfiles="%d" ConfigurationsSupported="VideoSource VideoEncoder" SnapshotUri="true" Rotation="false" VideoSourceMode="false" OSD="false" TemporaryOSDText="false" Mask="false" RTSPStreaming="true" SecureRTSPStreaming="false" RTPMulticast="false" RTP_RTSP_TCP="true" AutoStartMulticast="false" MultiTrackStreaming="false"/></tr2:GetServiceCapabilitiesResponse>`, s.profileCount()))
 	default:
