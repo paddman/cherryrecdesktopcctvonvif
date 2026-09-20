@@ -122,4 +122,3 @@ func TestMetadataMediaSerializesONVIFSDP(t *testing.T) {
 		}
 	}
 }
-
