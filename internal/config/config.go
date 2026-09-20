@@ -30,6 +30,9 @@ type Config struct {
 	SubstreamHeight   int    `json:"substream_height"`
 	SubstreamBitrate  string `json:"substream_bitrate"`
 	SnapshotRefreshMS int    `json:"snapshot_refresh_ms"`
+	OSDTextFile       string `json:"osd_text_file"`
+	OSDFontFile       string `json:"osd_font_file"`
+	OSDFontSize       int    `json:"osd_font_size"`
 	FPS               int    `json:"fps"`
 	Width             int    `json:"width"`
 	Height            int    `json:"height"`
@@ -66,7 +69,9 @@ func Default() Config {
 		SerialNumber: "CHERRY-SCREEN-001", FirmwareVersion: "1.0.0", ONVIFPort: 8088,
 		RTSPPort: 8554, RTSPPath: "screen", SubstreamEnabled: true, SubstreamPath: "screen_sub",
 		SubstreamFPS: 10, SubstreamWidth: 640, SubstreamHeight: 360, SubstreamBitrate: "800k",
-		SnapshotRefreshMS: 1000, FPS: 15, Width: 1920, Height: 1080,
+		SnapshotRefreshMS: 1000, OSDTextFile: "osd.txt",
+		OSDFontFile: "C:\\Windows\\Fonts\\arial.ttf", OSDFontSize: 24,
+		FPS: 15, Width: 1920, Height: 1080,
 		VideoBitrate: "4000k", GOPSeconds: 2, Encoder: "auto",
 		RecordingEnabled: true, RecordingDir: "recordings", SegmentSeconds: 300,
 		RetentionDays: 7, MaxRecordingGB: 500, FFmpegPath: "ffmpeg.exe",
@@ -164,6 +169,15 @@ func (c Config) Validate() error {
 	if c.SnapshotRefreshMS < 250 || c.SnapshotRefreshMS > 60000 {
 		return errors.New("snapshot_refresh_ms must be between 250 and 60000")
 	}
+	if strings.TrimSpace(c.OSDTextFile) == "" {
+		return errors.New("osd_text_file is required")
+	}
+	if strings.TrimSpace(c.OSDFontFile) == "" {
+		return errors.New("osd_font_file is required")
+	}
+	if c.OSDFontSize < 8 || c.OSDFontSize > 96 {
+		return errors.New("osd_font_size must be between 8 and 96")
+	}
 	switch c.Encoder {
 	case "auto", "libx264", "h264_nvenc", "h264_qsv", "h264_amf":
 	default:
@@ -206,6 +220,14 @@ func (c Config) RecordingAbsPath() string {
 	p, err := filepath.Abs(c.RecordingDir)
 	if err != nil {
 		return c.RecordingDir
+	}
+	return p
+}
+
+func (c Config) OSDTextAbsPath() string {
+	p, err := filepath.Abs(c.OSDTextFile)
+	if err != nil {
+		return c.OSDTextFile
 	}
 	return p
 }

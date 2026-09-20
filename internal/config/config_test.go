@@ -48,4 +48,16 @@ func TestDefaultSubstreamAndSnapshotSettings(t *testing.T) {
 	if !c.SubstreamEnabled || c.SubstreamPath == "" || c.SnapshotRefreshMS != 1000 {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
+	if c.OSDTextFile == "" || c.OSDFontFile == "" || c.OSDFontSize != 24 {
+		t.Fatalf("unexpected OSD defaults: %+v", c)
+	}
+}
+
+func TestValidateRejectsInvalidOSDFontSize(t *testing.T) {
+	c := Default()
+	c.InsecureNoAuth = true
+	c.OSDFontSize = 4
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected invalid OSD font size to fail")
+	}
 }

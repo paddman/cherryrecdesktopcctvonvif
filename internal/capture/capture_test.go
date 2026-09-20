@@ -25,6 +25,9 @@ func TestFFmpegUsesSingleCaptureAndNoPublisherSecret(t *testing.T) {
 	if !strings.Contains(joined, "scale=640:360") {
 		t.Fatalf("expected configured substream scale filter: %s", joined)
 	}
+	if !strings.Contains(joined, "drawtext=") || !strings.Contains(joined, "textfile=") || !strings.Contains(joined, "reload=1") {
+		t.Fatalf("expected reloadable OSD drawtext filter: %s", joined)
+	}
 }
 
 func TestMediaMTXEnvironmentEnforcesDigest(t *testing.T) {

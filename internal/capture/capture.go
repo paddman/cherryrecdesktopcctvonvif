@@ -34,8 +34,14 @@ func (m *Manager) Preflight(ctx context.Context) error {
 	if err := os.MkdirAll(m.cfg.RecordingAbsPath(), 0o750); err != nil {
 		return fmt.Errorf("create recording directory: %w", err)
 	}
+	if err := m.prepareOSD(); err != nil {
+		return fmt.Errorf("prepare OSD: %w", err)
+	}
 	if err := commandCheck(ctx, m.cfg.FFmpegPath, "-version"); err != nil {
 		return fmt.Errorf("ffmpeg preflight: %w", err)
+	}
+	if err := ffmpegFilterCheck(ctx, m.cfg.FFmpegPath, "drawtext"); err != nil {
+		return fmt.Errorf("ffmpeg OSD preflight: %w", err)
 	}
 	if err := commandCheck(ctx, m.cfg.MediaMTXPath, "--version"); err != nil {
 		return fmt.Errorf("mediamtx preflight: %w", err)
@@ -57,6 +63,19 @@ func commandCheck(parent context.Context, path, arg string) error {
 			msg = msg[len(msg)-500:]
 		}
 		return fmt.Errorf("%s %s failed: %w: %s", path, arg, err, msg)
+	}
+	return nil
+}
+
+func ffmpegFilterCheck(parent context.Context, path, filter string) error {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "-hide_banner", "-filters").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s -filters failed: %w", path, err)
+	}
+	if !strings.Contains(string(out), " "+filter+" ") {
+		return fmt.Errorf("required FFmpeg filter %q is unavailable", filter)
 	}
 	return nil
 }
@@ -148,9 +167,10 @@ func (m *Manager) ffmpegArgs(encoder string) []string {
 		"-video_size", fmt.Sprintf("%dx%d", m.cfg.Width, m.cfg.Height), "-i", "desktop",
 	}
 	mainGOP := strconv.Itoa(m.cfg.FPS * m.cfg.GOPSeconds)
+	osd := m.drawtextFilter()
 
 	if !m.cfg.SubstreamEnabled {
-		args = append(args, "-map", "0:v:0", "-an")
+		args = append(args, "-vf", osd, "-map", "0:v:0", "-an")
 		args = append(args, encoderArgs(encoder, m.cfg.VideoBitrate)...)
 		args = append(args,
 			"-pix_fmt", "yuv420p", "-g", mainGOP, "-keyint_min", mainGOP,
@@ -160,7 +180,7 @@ func (m *Manager) ffmpegArgs(encoder string) []string {
 	}
 
 	subURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.cfg.SubstreamPath)
-	filter := fmt.Sprintf("[0:v]split=2[main][sub];[sub]scale=%d:%d:flags=bicubic[subout]", m.cfg.SubstreamWidth, m.cfg.SubstreamHeight)
+	filter := fmt.Sprintf("[0:v]%s[osd];[osd]split=2[main][sub];[sub]scale=%d:%d:flags=bicubic[subout]", osd, m.cfg.SubstreamWidth, m.cfg.SubstreamHeight)
 	subGOP := strconv.Itoa(m.cfg.SubstreamFPS * m.cfg.GOPSeconds)
 
 	args = append(args, "-filter_complex", filter)
@@ -179,6 +199,38 @@ func (m *Manager) ffmpegArgs(encoder string) []string {
 		"-rtsp_transport", "tcp", "-f", "rtsp", subURL,
 	)
 	return args
+}
+
+func (m *Manager) prepareOSD() error {
+	textPath := m.cfg.OSDTextAbsPath()
+	if err := os.MkdirAll(filepath.Dir(textPath), 0o750); err != nil {
+		return err
+	}
+	if _, err := os.Stat(textPath); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(textPath, nil, 0o600); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if _, err := os.Stat(m.cfg.OSDFontFile); err != nil {
+		return fmt.Errorf("OSD font file %s: %w", m.cfg.OSDFontFile, err)
+	}
+	return nil
+}
+
+func (m *Manager) drawtextFilter() string {
+	font := ffmpegFilterPath(m.cfg.OSDFontFile)
+	text := ffmpegFilterPath(m.cfg.OSDTextAbsPath())
+	return fmt.Sprintf("drawtext=fontfile='%s':textfile='%s':reload=1:fontsize=%d:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=6:x=16:y=16", font, text, m.cfg.OSDFontSize)
+}
+
+func ffmpegFilterPath(path string) string {
+	path = filepath.ToSlash(path)
+	path = strings.ReplaceAll(path, "\\", "/")
+	path = strings.ReplaceAll(path, ":", "\\:")
+	path = strings.ReplaceAll(path, "'", "\\'")
+	return path
 }
 
 func encoderArgs(encoder, bitrate string) []string {
