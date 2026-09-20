@@ -18,7 +18,8 @@ Windows interactive desktop
         +---- fMP4 recording --------> recordings/screen/*
 
 NVR / VMS -- WS-Discovery --> UDP 3702
-NVR / VMS -- ONVIF SOAP ---> TCP 8088 (Device + Media1 + Media2)
+NVR / VMS -- ONVIF SOAP ---> TCP 8088 (Device + Media1 + Media2 + Events)
+NVR / VMS -- PullPoint -----> TCP 8088 (/onvif/pullpoint/<id>)
 NVR / VMS -- RTSP ---------> TCP 8554 / RTP UDP
 ```
 
@@ -34,6 +35,8 @@ The design deliberately separates ONVIF control/discovery from video transport. 
 - WS-Discovery Probe and Resolve responses
 - dynamic video profiles from configured resolution/FPS/bitrate
 - ONVIF Media1 plus a Media2 interoperability baseline for profiles, stream URI, snapshot URI and encoder discovery
+- ONVIF Event Service with PullPoint subscriptions, synchronization points, renew/unsubscribe and VideoLoss property events
+- Media2 text OSD lifecycle (Create/Get/Set/Delete/GetOptions) backed by a live FFmpeg drawtext text file
 - main + substream ONVIF profiles backed by one desktop capture pipeline
 - one long-lived snapshot cache worker instead of spawning FFmpeg for every snapshot request
 - ONVIF device/media operations used by common NVRs, including stream and snapshot URI
@@ -66,6 +69,7 @@ The default endpoints are:
 ONVIF Device  http://<PC-IP>:8088/onvif/device_service
 ONVIF Media   http://<PC-IP>:8088/onvif/media_service
 ONVIF Media2  http://<PC-IP>:8088/onvif/media2_service
+ONVIF Events  http://<PC-IP>:8088/onvif/events_service
 Snapshot      http://<PC-IP>:8088/snapshot.jpg
 RTSP main     rtsp://<PC-IP>:8554/screen
 RTSP sub      rtsp://<PC-IP>:8554/screen_sub
@@ -104,6 +108,8 @@ FFplay will prompt or can be supplied a password depending on the build/client. 
 - `substream_enabled`: enable the lower-bandwidth second ONVIF/RTSP profile.
 - `substream_path`, `substream_width`, `substream_height`, `substream_fps`, `substream_bitrate`: substream settings.
 - `snapshot_refresh_ms`: refresh interval for the long-lived in-memory JPEG snapshot cache.
+- `osd_text_file`: persistent text file used by the ONVIF Media2 OSD API and live FFmpeg overlay.
+- `osd_font_file`, `osd_font_size`: font used for the text OSD. The current baseline intentionally exposes only a single UpperLeft plain-text OSD so the advertised options exactly match what the renderer can apply.
 - `encoder`: `auto`, `h264_nvenc`, `h264_qsv`, `h264_amf`, or `libx264`.
 - `segment_seconds`: fMP4 recording segment duration.
 - `retention_days`: MediaMTX time-based retention.
@@ -117,7 +123,7 @@ Desktop capture needs the interactive user's desktop. Windows Services run in Se
 
 ## ONVIF status
 
-This implementation targets practical ONVIF discovery, Device/Media1 control, a Media2 interoperability baseline, and H.264 streaming interoperability. Media2 support is intentionally partial and does not yet include the full configuration/event/metadata/OSD surface. It is **not ONVIF-certified** and does not claim Profile T conformance. Before marketing it as conformant, run the applicable official ONVIF device test suite and complete the ONVIF conformance process.
+This implementation targets practical ONVIF discovery, Device/Media1 control, a Media2 interoperability baseline, PullPoint events, text OSD, and H.264 streaming interoperability. Media2 support is intentionally partial and does not yet include an ONVIF RTP metadata track or the complete Profile T surface. It is **not ONVIF-certified** and does not claim Profile T conformance. Before marketing it as conformant, run the applicable official ONVIF device test suite and complete the ONVIF conformance process.
 
 Profile S is being deprecated, so new compatibility work should target Profile T behavior.
 
