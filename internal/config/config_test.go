@@ -29,3 +29,24 @@ func TestValidateInsecureModeForDev(t *testing.T) {
 		t.Fatalf("insecure dev mode should validate: %v", err)
 	}
 }
+
+
+func TestValidateRejectsInvalidSubstream(t *testing.T) {
+	c := Default()
+	c.InsecureNoAuth = true
+	c.SubstreamPath = c.RTSPPath
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected duplicate main/substream RTSP path to fail")
+	}
+}
+
+func TestDefaultSubstreamAndSnapshotSettings(t *testing.T) {
+	c := Default()
+	c.InsecureNoAuth = true
+	if err := c.Validate(); err != nil {
+		t.Fatalf("default substream settings should validate: %v", err)
+	}
+	if !c.SubstreamEnabled || c.SubstreamPath == "" || c.SnapshotRefreshMS != 1000 {
+		t.Fatalf("unexpected defaults: %+v", c)
+	}
+}
