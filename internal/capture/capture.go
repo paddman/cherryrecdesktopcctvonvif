@@ -40,6 +40,9 @@ func (m *Manager) Preflight(ctx context.Context) error {
 	if err := commandCheck(ctx, m.cfg.FFmpegPath, "-version"); err != nil {
 		return fmt.Errorf("ffmpeg preflight: %w", err)
 	}
+	if err := ffmpegFilterCheck(ctx, m.cfg.FFmpegPath, "drawtext"); err != nil {
+		return fmt.Errorf("ffmpeg OSD preflight: %w", err)
+	}
 	if err := commandCheck(ctx, m.cfg.MediaMTXPath, "--version"); err != nil {
 		return fmt.Errorf("mediamtx preflight: %w", err)
 	}
@@ -60,6 +63,19 @@ func commandCheck(parent context.Context, path, arg string) error {
 			msg = msg[len(msg)-500:]
 		}
 		return fmt.Errorf("%s %s failed: %w: %s", path, arg, err, msg)
+	}
+	return nil
+}
+
+func ffmpegFilterCheck(parent context.Context, path, filter string) error {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "-hide_banner", "-filters").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s -filters failed: %w", path, err)
+	}
+	if !strings.Contains(string(out), " "+filter+" ") {
+		return fmt.Errorf("required FFmpeg filter %q is unavailable", filter)
 	}
 	return nil
 }
