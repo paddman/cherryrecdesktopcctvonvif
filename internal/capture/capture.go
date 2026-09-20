@@ -69,7 +69,7 @@ func (m *Manager) Run(ctx context.Context, advertiseIP string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("capture encoder=%s geometry=%dx%d+%d+%d fps=%d", encoder, m.cfg.Width, m.cfg.Height, m.cfg.OffsetX, m.cfg.OffsetY, m.cfg.FPS)
+	log.Printf("capture encoder=%s main=%dx%d@%dfps substream=%t sub=%dx%d@%dfps", encoder, m.cfg.Width, m.cfg.Height, m.cfg.FPS, m.cfg.SubstreamEnabled, m.cfg.SubstreamWidth, m.cfg.SubstreamHeight, m.cfg.SubstreamFPS)
 
 	go m.storageQuotaLoop(ctx)
 	go m.superviseMediaMTX(ctx)
@@ -140,19 +140,43 @@ func (m *Manager) superviseFFmpeg(ctx context.Context, encoder, advertiseIP stri
 }
 
 func (m *Manager) ffmpegArgs(encoder string) []string {
-	streamURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.cfg.RTSPPath)
+	mainURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.cfg.RTSPPath)
 	args := []string{
 		"-hide_banner", "-loglevel", "warning", "-nostdin",
 		"-f", "gdigrab", "-draw_mouse", "1", "-framerate", strconv.Itoa(m.cfg.FPS),
 		"-offset_x", strconv.Itoa(m.cfg.OffsetX), "-offset_y", strconv.Itoa(m.cfg.OffsetY),
 		"-video_size", fmt.Sprintf("%dx%d", m.cfg.Width, m.cfg.Height), "-i", "desktop",
-		"-map", "0:v:0", "-an",
 	}
+	mainGOP := strconv.Itoa(m.cfg.FPS * m.cfg.GOPSeconds)
+
+	if !m.cfg.SubstreamEnabled {
+		args = append(args, "-map", "0:v:0", "-an")
+		args = append(args, encoderArgs(encoder, m.cfg.VideoBitrate)...)
+		args = append(args,
+			"-pix_fmt", "yuv420p", "-g", mainGOP, "-keyint_min", mainGOP,
+			"-rtsp_transport", "tcp", "-f", "rtsp", mainURL,
+		)
+		return args
+	}
+
+	subURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.cfg.SubstreamPath)
+	filter := fmt.Sprintf("[0:v]split=2[main][sub];[sub]scale=%d:%d:flags=bicubic[subout]", m.cfg.SubstreamWidth, m.cfg.SubstreamHeight)
+	subGOP := strconv.Itoa(m.cfg.SubstreamFPS * m.cfg.GOPSeconds)
+
+	args = append(args, "-filter_complex", filter)
+
+	args = append(args, "-map", "[main]", "-an")
 	args = append(args, encoderArgs(encoder, m.cfg.VideoBitrate)...)
-	gop := strconv.Itoa(m.cfg.FPS * m.cfg.GOPSeconds)
 	args = append(args,
-		"-pix_fmt", "yuv420p", "-g", gop, "-keyint_min", gop,
-		"-rtsp_transport", "tcp", "-f", "rtsp", streamURL,
+		"-pix_fmt", "yuv420p", "-g", mainGOP, "-keyint_min", mainGOP,
+		"-rtsp_transport", "tcp", "-f", "rtsp", mainURL,
+	)
+
+	args = append(args, "-map", "[subout]", "-an", "-r", strconv.Itoa(m.cfg.SubstreamFPS))
+	args = append(args, encoderArgs(encoder, m.cfg.SubstreamBitrate)...)
+	args = append(args,
+		"-pix_fmt", "yuv420p", "-g", subGOP, "-keyint_min", subGOP,
+		"-rtsp_transport", "tcp", "-f", "rtsp", subURL,
 	)
 	return args
 }
@@ -213,6 +237,21 @@ func (m *Manager) mediaMTXEnv() []string {
 		"MTX_AUTHINTERNALUSERS_1_PERMISSIONS_0_PATH=" + m.cfg.RTSPPath,
 		"MTX_PATHS_" + pathKey + "_SOURCE=publisher",
 	}
+
+	if m.cfg.SubstreamEnabled {
+		subKey := strings.ToUpper(m.cfg.SubstreamPath)
+		env = append(env,
+			"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_2_ACTION=publish",
+			"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_2_PATH="+m.cfg.SubstreamPath,
+			"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_3_ACTION=read",
+			"MTX_AUTHINTERNALUSERS_0_PERMISSIONS_3_PATH="+m.cfg.SubstreamPath,
+			"MTX_AUTHINTERNALUSERS_1_PERMISSIONS_1_ACTION=read",
+			"MTX_AUTHINTERNALUSERS_1_PERMISSIONS_1_PATH="+m.cfg.SubstreamPath,
+			"MTX_PATHS_"+subKey+"_SOURCE=publisher",
+			"MTX_PATHS_"+subKey+"_RECORD=false",
+		)
+	}
+
 	if m.cfg.InsecureNoAuth {
 		env = append(env,
 			"MTX_AUTHINTERNALUSERS_1_USER=any",
