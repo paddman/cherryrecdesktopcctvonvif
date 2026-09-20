@@ -33,8 +33,8 @@ type Config struct {
 	OSDTextFile       string `json:"osd_text_file"`
 	OSDFontFile       string `json:"osd_font_file"`
 	OSDFontSize       int    `json:"osd_font_size"`
-	MetadataEnabled   bool   `json:"metadata_enabled"`
-	MetadataIntervalMS int   `json:"metadata_interval_ms"`
+	MetadataEnabled     bool `json:"metadata_enabled"`
+	MetadataIntervalMS  int  `json:"metadata_interval_ms"`
 	MetadataPayloadType int  `json:"metadata_payload_type"`
 	FPS               int    `json:"fps"`
 	Width             int    `json:"width"`
