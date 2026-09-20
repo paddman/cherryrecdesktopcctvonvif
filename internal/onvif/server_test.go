@@ -122,3 +122,28 @@ func TestReadJPEGFrame(t *testing.T) {
 		t.Fatalf("bad JPEG frame: %v", frame)
 	}
 }
+
+func TestMedia2VideoSourceConfigurations(t *testing.T) {
+	s := New(testConfig(), "10.0.0.10", func() bool { return true })
+	req := httptest.NewRequest(http.MethodPost, "/onvif/media2_service", strings.NewReader(`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><tr2:GetVideoSourceConfigurations xmlns:tr2="http://www.onvif.org/ver20/media/wsdl"><tr2:ProfileToken>screen_profile_sub</tr2:ProfileToken></tr2:GetVideoSourceConfigurations></s:Body></s:Envelope>`))
+	rr := httptest.NewRecorder()
+	s.media2(rr, req)
+	body, _ := io.ReadAll(rr.Result().Body)
+	got := string(body)
+	if rr.Code != http.StatusOK || !strings.Contains(got, `token="screen_source"`) || !strings.Contains(got, "<tt:UseCount>2</tt:UseCount>") {
+		t.Fatalf("unexpected Media2 video source configuration code=%d body=%s", rr.Code, got)
+	}
+}
+
+func TestMedia2EncoderInstancesSchema(t *testing.T) {
+	s := New(testConfig(), "10.0.0.10", func() bool { return true })
+	req := httptest.NewRequest(http.MethodPost, "/onvif/media2_service", strings.NewReader(`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><tr2:GetVideoEncoderInstances xmlns:tr2="http://www.onvif.org/ver20/media/wsdl"><tr2:ConfigurationToken>screen_source</tr2:ConfigurationToken></tr2:GetVideoEncoderInstances></s:Body></s:Envelope>`))
+	rr := httptest.NewRecorder()
+	s.media2(rr, req)
+	body, _ := io.ReadAll(rr.Result().Body)
+	got := string(body)
+	if rr.Code != http.StatusOK || !strings.Contains(got, "<tr2:Encoding>H264</tr2:Encoding>") || !strings.Contains(got, "<tr2:Number>2</tr2:Number>") || !strings.Contains(got, "<tr2:Total>2</tr2:Total>") {
+		t.Fatalf("unexpected Media2 encoder instances code=%d body=%s", rr.Code, got)
+	}
+}
+
