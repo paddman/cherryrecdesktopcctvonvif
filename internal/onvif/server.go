@@ -29,7 +29,7 @@ type Server struct {
 	uuid  string
 
 	snapshotMu      sync.RWMutex
-	snapshot        []byte
+	snapshotJPEG    []byte
 	snapshotUpdated time.Time
 }
 
@@ -417,7 +417,7 @@ func (s *Server) snapshotLoop(ctx context.Context) {
 				break
 			}
 			s.snapshotMu.Lock()
-			s.snapshot = append(s.snapshot[:0], frame...)
+			s.snapshotJPEG = append(s.snapshotJPEG[:0], frame...)
 			s.snapshotUpdated = time.Now()
 			s.snapshotMu.Unlock()
 			frames++
@@ -492,7 +492,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.snapshotMu.RLock()
-	frame := append([]byte(nil), s.snapshot...)
+	frame := append([]byte(nil), s.snapshotJPEG...)
 	updated := s.snapshotUpdated
 	s.snapshotMu.RUnlock()
 	if len(frame) == 0 {
