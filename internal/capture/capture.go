@@ -2,6 +2,7 @@ package capture
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,13 +22,66 @@ import (
 )
 
 type Manager struct {
-	cfg         config.Config
-	ready       atomic.Bool
-	sourceReady atomic.Bool
+	cfg            config.Config
+	cfgMu          sync.RWMutex
+	configPath     string
+	restartCapture chan struct{}
+	ready          atomic.Bool
+	sourceReady    atomic.Bool
 }
 
-func New(cfg config.Config) *Manager { return &Manager{cfg: cfg} }
-func (m *Manager) Ready() bool       { return m.ready.Load() }
+func New(cfg config.Config) *Manager {
+	return &Manager{cfg: cfg, restartCapture: make(chan struct{}, 1)}
+}
+
+func (m *Manager) Ready() bool { return m.ready.Load() }
+
+func (m *Manager) SetConfigPath(path string) {
+	m.cfgMu.Lock()
+	m.configPath = path
+	m.cfgMu.Unlock()
+}
+
+func (m *Manager) CurrentConfig() config.Config {
+	m.cfgMu.RLock()
+	defer m.cfgMu.RUnlock()
+	return m.cfg
+}
+
+func (m *Manager) UpdateConfig(next config.Config, persist bool) error {
+	if err := next.Validate(); err != nil {
+		return err
+	}
+
+	m.cfgMu.RLock()
+	path := m.configPath
+	m.cfgMu.RUnlock()
+	if persist {
+		if path == "" {
+			return errors.New("config path is not set")
+		}
+		if err := persistVideoConfig(path, next); err != nil {
+			return err
+		}
+	}
+
+	m.cfgMu.Lock()
+	m.cfg.FPS = next.FPS
+	m.cfg.Width = next.Width
+	m.cfg.Height = next.Height
+	m.cfg.VideoBitrate = next.VideoBitrate
+	m.cfg.SubstreamFPS = next.SubstreamFPS
+	m.cfg.SubstreamWidth = next.SubstreamWidth
+	m.cfg.SubstreamHeight = next.SubstreamHeight
+	m.cfg.SubstreamBitrate = next.SubstreamBitrate
+	m.cfgMu.Unlock()
+
+	select {
+	case m.restartCapture <- struct{}{}:
+	default:
+	}
+	return nil
+}
 
 func (m *Manager) Preflight(ctx context.Context) error {
 	if runtime.GOOS != "windows" {
@@ -141,26 +196,47 @@ func (m *Manager) superviseFFmpeg(ctx context.Context, encoder, advertiseIP stri
 	for ctx.Err() == nil {
 		m.sourceReady.Store(false)
 		m.ready.Store(false)
-		args := m.ffmpegArgs(encoder)
-		cmd := exec.CommandContext(ctx, m.cfg.FFmpegPath, args...)
+		cfg := m.CurrentConfig()
+		args := m.ffmpegArgsWithConfig(cfg, encoder)
+		cmd := exec.CommandContext(ctx, cfg.FFmpegPath, args...)
 		cmd.Stdout, cmd.Stderr = log.Writer(), log.Writer()
 		if err := cmd.Start(); err != nil {
 			log.Printf("FFmpeg start failed: %v", err)
 		} else {
 			m.sourceReady.Store(true)
-			if !m.cfg.MetadataEnabled {
+			if !cfg.MetadataEnabled {
 				m.ready.Store(true)
 			}
 			log.Printf("screen capture source online rtsp://127.0.0.1:%d/%s public=rtsp://%s:%d/%s metadata=%t",
-				m.cfg.RTSPPort, m.publishPath(m.cfg.RTSPPath), advertiseIP, m.cfg.RTSPPort, m.cfg.RTSPPath, m.cfg.MetadataEnabled)
+				cfg.RTSPPort, m.publishPath(cfg.RTSPPath), advertiseIP, cfg.RTSPPort, cfg.RTSPPath, cfg.MetadataEnabled)
 			started := time.Now()
-			err := cmd.Wait()
+			waitCh := make(chan error, 1)
+			go func() { waitCh <- cmd.Wait() }()
+
+			restarted := false
+			var waitErr error
+			select {
+			case <-ctx.Done():
+				_ = cmd.Process.Kill()
+				waitErr = <-waitCh
+			case <-m.restartCapture:
+				restarted = true
+				log.Printf("video encoder configuration changed; restarting FFmpeg capture")
+				_ = cmd.Process.Kill()
+				waitErr = <-waitCh
+			case waitErr = <-waitCh:
+			}
+
 			m.sourceReady.Store(false)
 			m.ready.Store(false)
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("FFmpeg exited: %v", err)
+			if restarted {
+				backoff = time.Second
+				continue
+			}
+			log.Printf("FFmpeg exited: %v", waitErr)
 			if time.Since(started) > time.Minute {
 				backoff = time.Second
 			}
@@ -173,19 +249,23 @@ func (m *Manager) superviseFFmpeg(ctx context.Context, encoder, advertiseIP stri
 }
 
 func (m *Manager) ffmpegArgs(encoder string) []string {
-	mainURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.publishPath(m.cfg.RTSPPath))
+	return m.ffmpegArgsWithConfig(m.CurrentConfig(), encoder)
+}
+
+func (m *Manager) ffmpegArgsWithConfig(cfg config.Config, encoder string) []string {
+	mainURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", cfg.RTSPPort, m.publishPath(cfg.RTSPPath))
 	args := []string{
 		"-hide_banner", "-loglevel", "warning", "-nostdin",
-		"-f", "gdigrab", "-draw_mouse", "1", "-framerate", strconv.Itoa(m.cfg.FPS),
-		"-offset_x", strconv.Itoa(m.cfg.OffsetX), "-offset_y", strconv.Itoa(m.cfg.OffsetY),
-		"-video_size", fmt.Sprintf("%dx%d", m.cfg.Width, m.cfg.Height), "-i", "desktop",
+		"-f", "gdigrab", "-draw_mouse", "1", "-framerate", strconv.Itoa(cfg.FPS),
+		"-offset_x", strconv.Itoa(cfg.OffsetX), "-offset_y", strconv.Itoa(cfg.OffsetY),
+		"-video_size", fmt.Sprintf("%dx%d", cfg.Width, cfg.Height), "-i", "desktop",
 	}
-	mainGOP := strconv.Itoa(m.cfg.FPS * m.cfg.GOPSeconds)
+	mainGOP := strconv.Itoa(cfg.FPS * cfg.GOPSeconds)
 	osd := m.drawtextFilter()
 
-	if !m.cfg.SubstreamEnabled {
+	if !cfg.SubstreamEnabled {
 		args = append(args, "-vf", osd, "-map", "0:v:0", "-an")
-		args = append(args, encoderArgs(encoder, m.cfg.VideoBitrate)...)
+		args = append(args, encoderArgs(encoder, cfg.VideoBitrate)...)
 		args = append(args,
 			"-pix_fmt", "yuv420p", "-g", mainGOP, "-keyint_min", mainGOP,
 			"-rtsp_transport", "tcp", "-f", "rtsp", mainURL,
@@ -193,21 +273,21 @@ func (m *Manager) ffmpegArgs(encoder string) []string {
 		return args
 	}
 
-	subURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.publishPath(m.cfg.SubstreamPath))
-	filter := fmt.Sprintf("[0:v]%s[osd];[osd]split=2[main][sub];[sub]scale=%d:%d:flags=bicubic[subout]", osd, m.cfg.SubstreamWidth, m.cfg.SubstreamHeight)
-	subGOP := strconv.Itoa(m.cfg.SubstreamFPS * m.cfg.GOPSeconds)
+	subURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s", m.cfg.RTSPPort, m.publishPath(cfg.SubstreamPath))
+	filter := fmt.Sprintf("[0:v]%s[osd];[osd]split=2[main][sub];[sub]scale=%d:%d:flags=bicubic[subout]", osd, cfg.SubstreamWidth, cfg.SubstreamHeight)
+	subGOP := strconv.Itoa(cfg.SubstreamFPS * cfg.GOPSeconds)
 
 	args = append(args, "-filter_complex", filter)
 
 	args = append(args, "-map", "[main]", "-an")
-	args = append(args, encoderArgs(encoder, m.cfg.VideoBitrate)...)
+	args = append(args, encoderArgs(encoder, cfg.VideoBitrate)...)
 	args = append(args,
 		"-pix_fmt", "yuv420p", "-g", mainGOP, "-keyint_min", mainGOP,
 		"-rtsp_transport", "tcp", "-f", "rtsp", mainURL,
 	)
 
-	args = append(args, "-map", "[subout]", "-an", "-r", strconv.Itoa(m.cfg.SubstreamFPS))
-	args = append(args, encoderArgs(encoder, m.cfg.SubstreamBitrate)...)
+	args = append(args, "-map", "[subout]", "-an", "-r", strconv.Itoa(cfg.SubstreamFPS))
+	args = append(args, encoderArgs(encoder, cfg.SubstreamBitrate)...)
 	args = append(args,
 		"-pix_fmt", "yuv420p", "-g", subGOP, "-keyint_min", subGOP,
 		"-rtsp_transport", "tcp", "-f", "rtsp", subURL,
@@ -473,4 +553,33 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+
+func persistVideoConfig(path string, cfg config.Config) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config for persistence: %w", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("parse config for persistence: %w", err)
+	}
+	doc["fps"] = cfg.FPS
+	doc["width"] = cfg.Width
+	doc["height"] = cfg.Height
+	doc["video_bitrate"] = cfg.VideoBitrate
+	doc["substream_fps"] = cfg.SubstreamFPS
+	doc["substream_width"] = cfg.SubstreamWidth
+	doc["substream_height"] = cfg.SubstreamHeight
+	doc["substream_bitrate"] = cfg.SubstreamBitrate
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return fmt.Errorf("persist video config: %w", err)
+	}
+	return nil
 }
