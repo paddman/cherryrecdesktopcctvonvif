@@ -53,7 +53,6 @@ func TestDefaultSubstreamAndSnapshotSettings(t *testing.T) {
 	}
 }
 
-
 func TestValidateRejectsInvalidOSDFontSize(t *testing.T) {
 	c := Default()
 	c.InsecureNoAuth = true
