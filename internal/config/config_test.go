@@ -90,4 +90,3 @@ func TestValidateRejectsInvalidMetadataInterval(t *testing.T) {
 		t.Fatal("expected invalid metadata interval to fail")
 	}
 }
-
