@@ -22,11 +22,12 @@ import (
 )
 
 type Server struct {
-	cfg   config.Config
-	ip    string
-	auth  *cherryAuth.Authenticator
-	ready func() bool
-	uuid  string
+	cfg             config.Config
+	ip              string
+	auth            *cherryAuth.Authenticator
+	ready           func() bool
+	uuid            string
+	videoController VideoConfigController
 
 	snapshotMu      sync.RWMutex
 	snapshotJPEG    []byte
@@ -44,6 +45,17 @@ func New(cfg config.Config, ip string, ready func() bool) *Server {
 		s.auth = cherryAuth.New(cfg.ONVIFUsername, cfg.ONVIFPassword, cfg.AuthRealm)
 	}
 	return s
+}
+
+func (s *Server) SetVideoConfigController(controller VideoConfigController) {
+	s.videoController = controller
+}
+
+func (s *Server) videoConfig() config.Config {
+	if s.videoController != nil {
+		return s.videoController.CurrentConfig()
+	}
+	return s.cfg
 }
 
 func (s *Server) Addr() string { return fmt.Sprintf(":%d", s.cfg.ONVIFPort) }
@@ -201,14 +213,17 @@ func (s *Server) media(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.soap(w, `<trt:GetVideoEncoderConfigurationResponse>`+inner+`</trt:GetVideoEncoderConfigurationResponse>`)
+	case "SetVideoEncoderConfiguration":
+		s.setVideoEncoderConfiguration(w, body, false)
 	case "GetVideoEncoderConfigurationOptions":
-		width, height, fps := s.cfg.Width, s.cfg.Height, s.cfg.FPS
+		cfg := s.videoConfig()
+		width, height, fps := cfg.Width, cfg.Height, cfg.FPS
 		if elementText(body, "ConfigurationToken") == "screen_encoder_sub" || elementText(body, "ProfileToken") == "screen_profile_sub" {
 			if !s.cfg.SubstreamEnabled {
 				s.fault(w, "ter:NoConfig", "Substream is disabled")
 				return
 			}
-			width, height, fps = s.cfg.SubstreamWidth, s.cfg.SubstreamHeight, s.cfg.SubstreamFPS
+			width, height, fps = cfg.SubstreamWidth, cfg.SubstreamHeight, cfg.SubstreamFPS
 		}
 		s.soap(w, fmt.Sprintf(`<trt:GetVideoEncoderConfigurationOptionsResponse><trt:Options><tt:QualityRange><tt:Min>1</tt:Min><tt:Max>10</tt:Max></tt:QualityRange><tt:H264><tt:ResolutionsAvailable><tt:Width>%d</tt:Width><tt:Height>%d</tt:Height></tt:ResolutionsAvailable><tt:GovLengthRange><tt:Min>%d</tt:Min><tt:Max>%d</tt:Max></tt:GovLengthRange><tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>%d</tt:Max></tt:FrameRateRange><tt:EncodingIntervalRange><tt:Min>1</tt:Min><tt:Max>1</tt:Max></tt:EncodingIntervalRange><tt:H264ProfilesSupported>High</tt:H264ProfilesSupported></tt:H264></trt:Options></trt:GetVideoEncoderConfigurationOptionsResponse>`, width, height, fps, fps*10, fps))
 	case "GetStreamUri":
@@ -293,6 +308,8 @@ func (s *Server) media2(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.soapMedia2(w, fmt.Sprintf(`<tr2:GetVideoSourceConfigurationsResponse><tr2:Configurations token="screen_source"><tt:Name>Desktop</tt:Name><tt:UseCount>%d</tt:UseCount><tt:SourceToken>desktop</tt:SourceToken><tt:Bounds x="%d" y="%d" width="%d" height="%d"/></tr2:Configurations></tr2:GetVideoSourceConfigurationsResponse>`, s.profileCount(), s.cfg.OffsetX, s.cfg.OffsetY, s.cfg.Width, s.cfg.Height))
+	case "SetVideoEncoderConfiguration":
+		s.setVideoEncoderConfiguration(w, body, true)
 	case "GetVideoEncoderConfigurations":
 		xml := s.media2EncoderXML(false)
 		if s.cfg.SubstreamEnabled {
@@ -604,6 +621,7 @@ func (s *Server) media1ProfileByToken(token string) (string, bool) {
 }
 
 func (s *Server) profileXML(sub bool) string {
+	cfg := s.videoConfig()
 	profileToken, profileName := "screen_profile", "Desktop Screen"
 	encoder := s.encoderXML("tt:VideoEncoderConfiguration")
 	if sub {
@@ -614,20 +632,23 @@ func (s *Server) profileXML(sub bool) string {
 	if s.cfg.MetadataEnabled {
 		metadata = s.metadataConfigurationXML("tt:MetadataConfiguration")
 	}
-	return fmt.Sprintf(`<trt:Profile fixed="true" token="%s"><tt:Name>%s</tt:Name><tt:VideoSourceConfiguration token="screen_source"><tt:Name>Desktop</tt:Name><tt:UseCount>%d</tt:UseCount><tt:SourceToken>desktop</tt:SourceToken><tt:Bounds x="%d" y="%d" width="%d" height="%d"/></tt:VideoSourceConfiguration>%s%s</trt:Profile>`, profileToken, profileName, s.profileCount(), s.cfg.OffsetX, s.cfg.OffsetY, s.cfg.Width, s.cfg.Height, encoder, metadata)
+	return fmt.Sprintf(`<trt:Profile fixed="true" token="%s"><tt:Name>%s</tt:Name><tt:VideoSourceConfiguration token="screen_source"><tt:Name>Desktop</tt:Name><tt:UseCount>%d</tt:UseCount><tt:SourceToken>desktop</tt:SourceToken><tt:Bounds x="%d" y="%d" width="%d" height="%d"/></tt:VideoSourceConfiguration>%s%s</trt:Profile>`, profileToken, profileName, s.profileCount(), cfg.OffsetX, cfg.OffsetY, cfg.Width, cfg.Height, encoder, metadata)
 }
 
 func (s *Server) encoderXML(tag string) string {
-	return s.encoderXMLFor(tag, "screen_encoder", "H264 Desktop", s.cfg.Width, s.cfg.Height, s.cfg.FPS, s.cfg.VideoBitrate)
+	cfg := s.videoConfig()
+	return s.encoderXMLFor(tag, "screen_encoder", "H264 Desktop", cfg.Width, cfg.Height, cfg.FPS, cfg.VideoBitrate)
 }
 
 func (s *Server) subEncoderXML(tag string) string {
-	return s.encoderXMLFor(tag, "screen_encoder_sub", "H264 Desktop Substream", s.cfg.SubstreamWidth, s.cfg.SubstreamHeight, s.cfg.SubstreamFPS, s.cfg.SubstreamBitrate)
+	cfg := s.videoConfig()
+	return s.encoderXMLFor(tag, "screen_encoder_sub", "H264 Desktop Substream", cfg.SubstreamWidth, cfg.SubstreamHeight, cfg.SubstreamFPS, cfg.SubstreamBitrate)
 }
 
 func (s *Server) encoderXMLFor(tag, token, name string, width, height, fps int, bitrateValue string) string {
 	bitrate := bitrateKbps(bitrateValue)
-	return fmt.Sprintf(`<%s token="%s"><tt:Name>%s</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>H264</tt:Encoding><tt:Resolution><tt:Width>%d</tt:Width><tt:Height>%d</tt:Height></tt:Resolution><tt:Quality>5</tt:Quality><tt:RateControl><tt:FrameRateLimit>%d</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>%d</tt:BitrateLimit></tt:RateControl><tt:H264><tt:GovLength>%d</tt:GovLength><tt:H264Profile>High</tt:H264Profile></tt:H264><tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address><tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT60S</tt:SessionTimeout></%s>`, tag, token, name, width, height, fps, bitrate, fps*s.cfg.GOPSeconds, tag)
+	cfg := s.videoConfig()
+	return fmt.Sprintf(`<%s token="%s"><tt:Name>%s</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>H264</tt:Encoding><tt:Resolution><tt:Width>%d</tt:Width><tt:Height>%d</tt:Height></tt:Resolution><tt:Quality>5</tt:Quality><tt:RateControl><tt:FrameRateLimit>%d</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>%d</tt:BitrateLimit></tt:RateControl><tt:H264><tt:GovLength>%d</tt:GovLength><tt:H264Profile>High</tt:H264Profile></tt:H264><tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address><tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT60S</tt:SessionTimeout></%s>`, tag, token, name, width, height, fps, bitrate, fps*cfg.GOPSeconds, tag)
 }
 
 func (s *Server) soap(w http.ResponseWriter, inner string) {
