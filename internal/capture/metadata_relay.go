@@ -51,6 +51,18 @@ func (s *metadataRTPState) packet(payloadType uint8, now time.Time, payload []by
 	}
 }
 
+func newMetadataMedia(payloadType uint8, control string) *description.Media {
+	return &description.Media{
+		Type:    description.MediaTypeApplication,
+		Control: control,
+		Formats: []format.Format{&format.Generic{
+			PayloadTyp: payloadType,
+			RTPMa:      "vnd.onvif.metadata/90000",
+			ClockRat:   metadataClockRate,
+		}},
+	}
+}
+
 func (m *Manager) superviseMetadataRelay(ctx context.Context, sourcePath, destinationPath string, primary bool) {
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -109,16 +121,7 @@ func (m *Manager) runMetadataRelay(ctx context.Context, sourcePath, destinationP
 	for i, media := range desc.Medias {
 		media.Control = fmt.Sprintf("trackID=%d", i)
 	}
-	metadataFormat := &format.Generic{
-		PayloadTyp: payloadType,
-		RTPMa:      "vnd.onvif.metadata/90000",
-		ClockRat:   metadataClockRate,
-	}
-	metadataMedia := &description.Media{
-		Type:    description.MediaTypeApplication,
-		Control: fmt.Sprintf("trackID=%d", len(desc.Medias)),
-		Formats: []format.Format{metadataFormat},
-	}
+	metadataMedia := newMetadataMedia(payloadType, fmt.Sprintf("trackID=%d", len(desc.Medias)))
 	desc.Medias = append(desc.Medias, metadataMedia)
 
 	publisherTransport := gortsplib.TransportTCP
@@ -213,6 +216,12 @@ func (m *Manager) runMetadataRelay(ctx context.Context, sourcePath, destinationP
 		case <-ctx.Done():
 			return nil
 		case err := <-errCh:
+			now := time.Now().UTC()
+			lossPayload := metadataDocument(now, true, "Changed", m.cfg.SerialNumber)
+			lossPacket := state.packet(payloadType, now, lossPayload)
+			writeMu.Lock()
+			_ = publisher.WritePacketRTP(metadataMedia, lossPacket)
+			writeMu.Unlock()
 			if err == nil {
 				return fmt.Errorf("RTSP relay stopped")
 			}
