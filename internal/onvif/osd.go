@@ -175,6 +175,9 @@ func (s *Server) validateOSD(cfg osdConfiguration, requireToken bool) error {
 	if cfg.TextString.FontSize != 0 && cfg.TextString.FontSize != s.cfg.OSDFontSize {
 		return fmt.Errorf("unsupported OSD font size")
 	}
+	if cfg.TextString.PlainText == "" {
+		return fmt.Errorf("plain-text OSD requires non-empty text")
+	}
 	if len([]rune(cfg.TextString.PlainText)) > 256 {
 		return fmt.Errorf("OSD text is limited to 256 characters")
 	}
