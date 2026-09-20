@@ -146,4 +146,3 @@ func TestMedia2EncoderInstancesSchema(t *testing.T) {
 		t.Fatalf("unexpected Media2 encoder instances code=%d body=%s", rr.Code, got)
 	}
 }
-
