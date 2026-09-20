@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bluenviron/gortsplib/v4/pkg/description"
 	"github.com/paddman/cherryrecdesktopcctvonvif/internal/config"
 )
 
@@ -101,3 +102,24 @@ func TestMetadataDocumentEncodesPropertyAndHeartbeat(t *testing.T) {
 		t.Fatalf("metadata heartbeat must close the XML document: %s", heartbeat)
 	}
 }
+
+func TestMetadataMediaSerializesONVIFSDP(t *testing.T) {
+	desc := &description.Session{
+		Medias: []*description.Media{newMetadataMedia(107, "trackID=1")},
+	}
+	sdp, err := desc.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(sdp)
+	for _, want := range []string{
+		"m=application 0 RTP/AVP 107",
+		"a=rtpmap:107 vnd.onvif.metadata/90000",
+		"a=control:trackID=1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metadata SDP missing %q:\n%s", want, got)
+		}
+	}
+}
+
